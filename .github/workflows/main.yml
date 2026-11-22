@@ -23,7 +23,7 @@ jobs:
           gradle-version: '8.9'
 
       - name: Extract project
-        run: unzip -o CarromAimPro_GitHub.zip -d project
+        run: unzip -o app.zip -d project
 
       - name: Build APK
         run: gradle -p project assembleDebug
