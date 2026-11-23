@@ -51,9 +51,11 @@ class CaptureService : Service() {
                 val frame = Bitmap.createBitmap(padded, 0, 0, image.width, image.height)
                 padded.recycle()
                 val detected = DiscVision.detect(frame)
+                val detectedStriker = detected.firstOrNull { it.kind == 4 }
+                val liveAim = detectedStriker?.let { AimGuideVision.detect(frame, it) }
                 frame.recycle()
                 val tracked = tracker.update(detected, now)
-                handler.post { overlay?.update(tracked.discs, dm.widthPixels, dm.heightPixels, tracked.isMoving, DiscVision.currentBoardBounds()) }
+                handler.post { overlay?.update(tracked.discs, dm.widthPixels, dm.heightPixels, tracked.isMoving, DiscVision.currentBoardBounds(), liveAim) }
             } catch (_: Exception) {
             } finally { image.close() }
         }, handler)
@@ -276,6 +278,77 @@ object DiscVision {
     }
 }
 
+/**
+ * Detects the live aiming guide rendered by Carrom Pool.
+ * It only accepts a long, reasonably continuous bright/cyan ray starting just
+ * outside the striker; isolated highlights and short reflections are rejected.
+ */
+object AimGuideVision {
+    fun detect(source: Bitmap, striker: Disc): PointF? {
+        val board = DiscVision.currentBoardBounds() ?: return null
+        val scale = source.width.toFloat() / 480f
+        val small = Bitmap.createScaledBitmap(source, 480, max(1, (source.height / scale).roundToInt()), true)
+        try {
+            val sx = striker.x / scale
+            val sy = striker.y / scale
+            val radius = max(4f, striker.radius / scale)
+            val maxDistance = (min(board.width(), board.height()) / scale * 0.42f).coerceAtLeast(70f)
+            var bestScore = 0f
+            var bestAngle = 0.0
+            for (degree in 0 until 360) {
+                val a = Math.toRadians(degree.toDouble())
+                val ux = cos(a).toFloat()
+                val uy = sin(a).toFloat()
+                var hits = 0
+                var run = 0
+                var longestRun = 0
+                var firstHit = -1f
+                var lastHit = -1f
+                var d = radius * 1.35f
+                while (d <= maxDistance) {
+                    val x = (sx + ux*d).roundToInt()
+                    val y = (sy + uy*d).roundToInt()
+                    var hit = false
+                    for (off in -2..2) {
+                        val px = (x - uy*off).roundToInt()
+                        val py = (y + ux*off).roundToInt()
+                        if (px !in 0 until small.width || py !in 0 until small.height) continue
+                        val c = small.getPixel(px, py)
+                        val rr = Color.red(c); val gg = Color.green(c); val bb = Color.blue(c)
+                        val whiteGuide = rr > 205 && gg > 205 && bb > 205 && max(rr,max(gg,bb))-min(rr,min(gg,bb)) < 48
+                        val cyanGuide = gg > 165 && bb > 175 && rr < 155
+                        if (whiteGuide || cyanGuide) { hit = true; break }
+                    }
+                    if (hit) {
+                        hits++
+                        run++
+                        if (firstHit < 0f) firstHit = d
+                        lastHit = d
+                        longestRun = max(longestRun, run)
+                    } else {
+                        run = 0
+                    }
+                    d += 3f
+                }
+                val span = if (firstHit >= 0f) lastHit-firstHit else 0f
+                val score = hits + longestRun*0.7f + span*0.025f
+                if (hits >= 9 && longestRun >= 4 && span >= 35f && score > bestScore) {
+                    bestScore = score
+                    bestAngle = a
+                }
+            }
+            if (bestScore < 18f) return null
+            val reach = min(maxDistance, max(radius*8f, 220f))
+            return PointF(
+                striker.x + cos(bestAngle).toFloat()*reach*scale,
+                striker.y + sin(bestAngle).toFloat()*reach*scale
+            )
+        } finally {
+            small.recycle()
+        }
+    }
+}
+
 object CarromPhysics {
     data class Ray(val x1: Float, val y1: Float, val x2: Float, val y2: Float, val discIndex: Int = 0)
     data class Result(val paths: List<Ray>, val finalDiscs: List<Disc>)
@@ -332,9 +405,24 @@ object CarromPhysics {
         if (discs.size < 2) return Result(emptyList(), discs)
         val strikerIndex = discs.indices.firstOrNull { discs[it].kind == 4 }
             ?: (discs.indices.maxByOrNull { discs[it].y } ?: return Result(emptyList(), discs))
-        val targetIndex = discs.indices.filter { it != strikerIndex && discs[it].kind != 4 }
+        val fallbackTarget = discs.indices.filter { it != strikerIndex && discs[it].kind != 4 }
             .minByOrNull { hypot(discs[it].x - discs[strikerIndex].x, discs[it].y - discs[strikerIndex].y) }
             ?: return Result(emptyList(), discs)
+        val directionX = (aimX ?: discs[fallbackTarget].x) - discs[strikerIndex].x
+        val directionY = (aimY ?: discs[fallbackTarget].y) - discs[strikerIndex].y
+        val directionLength = hypot(directionX, directionY).coerceAtLeast(1f)
+        val ux = directionX / directionLength
+        val uy = directionY / directionLength
+        val targetIndex = discs.indices.filter { it != strikerIndex && discs[it].kind != 4 }
+            .map { index ->
+                val ox = discs[index].x - discs[strikerIndex].x
+                val oy = discs[index].y - discs[strikerIndex].y
+                val along = ox*ux + oy*uy
+                val across = abs(ox*uy - oy*ux)
+                Triple(index, along, across)
+            }
+            .filter { it.second > 0f && it.third < discs[it.first].radius + discs[strikerIndex].radius*1.8f }
+            .minByOrNull { it.third + it.second*0.0008f }?.first ?: fallbackTarget
 
         val n = discs.size
         val x = FloatArray(n) { discs[it].x }
@@ -424,7 +512,8 @@ class AimOverlay(context: Context) : View(context) {
     @Volatile private var piecesMoving: Boolean = false
     private var screenW = 1f; private var screenH = 1f
     @Volatile private var boardBounds: RectF? = null
-    fun update(items: List<Disc>, w: Int, h: Int, moving: Boolean, board: RectF?) { discs = items; screenW = w.toFloat(); screenH = h.toFloat(); boardBounds = board; piecesMoving = moving; postInvalidate() }
+    @Volatile private var liveAimPoint: PointF? = null
+    fun update(items: List<Disc>, w: Int, h: Int, moving: Boolean, board: RectF?, aim: PointF?) { discs = items; screenW = w.toFloat(); screenH = h.toFloat(); boardBounds = board; liveAimPoint = aim; piecesMoving = moving; postInvalidate() }
     override fun onDraw(c: Canvas) {
         super.onDraw(c)
         val list = discs
@@ -448,18 +537,22 @@ class AimOverlay(context: Context) : View(context) {
         }
         val plans = CarromPhysics.bestPlans(list, board.left, board.top, board.right, board.bottom)
         val best = plans.firstOrNull()
-        if (best != null) {
-            val aimPaint = Paint(3).apply { color = Color.YELLOW; style = Paint.Style.STROKE; strokeWidth = 5f }
-            val coinPaint = Paint(3).apply { color = Color.GREEN; style = Paint.Style.STROKE; strokeWidth = 4f }
+        val liveAim = liveAimPoint
+        val aimPaint = Paint(3).apply { color = if (liveAim != null) Color.CYAN else Color.YELLOW; style = Paint.Style.STROKE; strokeWidth = 5f }
+        val coinPaint = Paint(3).apply { color = Color.GREEN; style = Paint.Style.STROKE; strokeWidth = 4f }
+        if (liveAim != null && striker != null) {
+            c.drawLine(striker.x, striker.y, liveAim.x, liveAim.y, aimPaint)
+            c.drawText("تم رصد خط التصويب المباشر", 20f, 38f, textPaint)
+        } else if (best != null) {
             c.drawLine(best.strikerX, best.strikerY, best.ghostX, best.ghostY, aimPaint)
             c.drawLine(best.coinX, best.coinY, best.pocketX, best.pocketY, coinPaint)
             c.drawCircle(best.ghostX, best.ghostY, (striker?.radius ?: 10f)*0.75f, aimPaint)
-            plans.drop(1).forEachIndexed { index, plan ->
-                val alt = Paint(3).apply { color = 0x88FFFFFF.toInt(); style = Paint.Style.STROKE; strokeWidth = 2f }
-                c.drawLine(plan.strikerX, plan.strikerY, plan.ghostX, plan.ghostY, alt)
-            }
+            c.drawText("اقتراح تصويب تلقائي - تقديري", 20f, 38f, textPaint)
         }
-        val simulation = CarromPhysics.simulate(list, board.left, board.top, board.right, board.bottom, best?.ghostX, best?.ghostY)
+        val simulation = CarromPhysics.simulate(
+            list, board.left, board.top, board.right, board.bottom,
+            liveAim?.x ?: best?.ghostX, liveAim?.y ?: best?.ghostY
+        )
         simulation.paths.forEach { c.drawLine(it.x1, it.y1, it.x2, it.y2, pathPaint) }
         val ghostPaint = Paint(3).apply { color = Color.MAGENTA; style = Paint.Style.STROKE; strokeWidth = 2f; alpha = 150 }
         simulation.finalDiscs.forEach {
