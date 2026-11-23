@@ -284,6 +284,11 @@ object DiscVision {
  * outside the striker; isolated highlights and short reflections are rejected.
  */
 object AimGuideVision {
+    /**
+     * Reads the actual colored aiming ray. Carrom Pool commonly renders a
+     * saturated red/orange guide; older builds/themes may use cyan/white.
+     * Only a continuous segment that begins at the striker is accepted.
+     */
     fun detect(source: Bitmap, striker: Disc): PointF? {
         val board = DiscVision.currentBoardBounds() ?: return null
         val scale = source.width.toFloat() / 480f
@@ -292,56 +297,68 @@ object AimGuideVision {
             val sx = striker.x / scale
             val sy = striker.y / scale
             val radius = max(4f, striker.radius / scale)
-            val maxDistance = (min(board.width(), board.height()) / scale * 0.42f).coerceAtLeast(70f)
-            var bestScore = 0f
-            var bestAngle = 0.0
-            for (degree in 0 until 360) {
-                val a = Math.toRadians(degree.toDouble())
-                val ux = cos(a).toFloat()
-                val uy = sin(a).toFloat()
-                var hits = 0
-                var run = 0
-                var longestRun = 0
-                var firstHit = -1f
-                var lastHit = -1f
-                var d = radius * 1.35f
-                while (d <= maxDistance) {
-                    val x = (sx + ux*d).roundToInt()
-                    val y = (sy + uy*d).roundToInt()
-                    var hit = false
-                    for (off in -2..2) {
-                        val px = (x - uy*off).roundToInt()
-                        val py = (y + ux*off).roundToInt()
-                        if (px !in 0 until small.width || py !in 0 until small.height) continue
-                        val c = small.getPixel(px, py)
-                        val rr = Color.red(c); val gg = Color.green(c); val bb = Color.blue(c)
-                        val whiteGuide = rr > 205 && gg > 205 && bb > 205 && max(rr,max(gg,bb))-min(rr,min(gg,bb)) < 48
-                        val cyanGuide = gg > 165 && bb > 175 && rr < 155
-                        if (whiteGuide || cyanGuide) { hit = true; break }
+            val maxDistance = (min(board.width(), board.height()) / scale * 0.44f).coerceAtLeast(70f)
+            data class RayScore(val angle: Double, val run: Int, val end: Float, val score: Float)
+            var best: RayScore? = null
+
+            fun guideColor(c: Int): Int {
+                val r = Color.red(c); val g = Color.green(c); val b = Color.blue(c)
+                val maxC = max(r, max(g, b)); val minC = min(r, min(g, b))
+                val redOrange = r > 165 && r > g * 1.28f && g > b * 1.12f && maxC-minC > 55
+                val cyan = g > 165 && b > 175 && r < 155
+                val white = r > 225 && g > 225 && b > 225 && maxC-minC < 28
+                return when { redOrange -> 3; cyan -> 2; white -> 1; else -> 0 }
+            }
+
+            // 2-degree sweep with short gaps tolerated for antialiasing.
+            for (degree in 0 until 360 step 2) {
+                val angle = Math.toRadians(degree.toDouble())
+                val ux = cos(angle).toFloat()
+                val uy = sin(angle).toFloat()
+                var currentRun = 0
+                var bestRun = 0
+                var runEnd = 0f
+                var gap = 0
+                var colorWeight = 0f
+                var distance = radius * 1.25f
+                while (distance <= maxDistance) {
+                    val x = (sx + ux * distance).roundToInt()
+                    val y = (sy + uy * distance).roundToInt()
+                    var strongest = 0
+                    for (offset in -2..2) {
+                        val px = (x - uy * offset).roundToInt()
+                        val py = (y + ux * offset).roundToInt()
+                        if (px in 0 until small.width && py in 0 until small.height) {
+                            strongest = max(strongest, guideColor(small.getPixel(px, py)))
+                        }
                     }
-                    if (hit) {
-                        hits++
-                        run++
-                        if (firstHit < 0f) firstHit = d
-                        lastHit = d
-                        longestRun = max(longestRun, run)
+                    if (strongest > 0) {
+                        currentRun++
+                        gap = 0
+                        colorWeight += strongest.toFloat()
+                        if (currentRun > bestRun) {
+                            bestRun = currentRun
+                            runEnd = distance
+                        }
                     } else {
-                        run = 0
+                        gap++
+                        if (gap > 2) {
+                            currentRun = 0
+                            colorWeight = 0f
+                        }
                     }
-                    d += 3f
+                    distance += 3f
                 }
-                val span = if (firstHit >= 0f) lastHit-firstHit else 0f
-                val score = hits + longestRun*0.7f + span*0.025f
-                if (hits >= 9 && longestRun >= 4 && span >= 35f && score > bestScore) {
-                    bestScore = score
-                    bestAngle = a
+                val score = bestRun * 1.8f + runEnd * 0.035f + colorWeight * 0.025f
+                if (bestRun >= 7 && runEnd >= 24f && (best == null || score > best!!.score)) {
+                    best = RayScore(angle, bestRun, runEnd, score)
                 }
             }
-            if (bestScore < 18f) return null
-            val reach = min(maxDistance, max(radius*8f, 220f))
+            val ray = best ?: return null
+            val reach = ray.end.coerceIn(radius * 3f, maxDistance)
             return PointF(
-                striker.x + cos(bestAngle).toFloat()*reach*scale,
-                striker.y + sin(bestAngle).toFloat()*reach*scale
+                (sx + cos(ray.angle).toFloat() * reach) * scale,
+                (sy + sin(ray.angle).toFloat() * reach) * scale
             )
         } finally {
             small.recycle()
