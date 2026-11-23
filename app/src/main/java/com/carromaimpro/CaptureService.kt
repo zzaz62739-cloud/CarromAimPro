@@ -156,7 +156,26 @@ object DiscVision {
             }
             y += step
         }
-        return candidates.sortedByDescending { it.score }.take(25).map { it.disc }
+        // Accept pieces only inside the centered, approximately square play area.
+        // This rejects most unrelated colored UI elements elsewhere on the phone screen.
+        val boardSize = min(w * 0.94f, h * 0.94f)
+        val boardLeft = (w - boardSize) / 2f
+        val boardTop = (h - boardSize) / 2f
+        val boardRight = boardLeft + boardSize
+        val boardBottom = boardTop + boardSize
+        val boardCandidates = candidates
+            .sortedByDescending { it.score }
+            .map { it.disc }
+            .filter {
+                it.x / scale >= boardLeft && it.x / scale <= boardRight &&
+                it.y / scale >= boardTop && it.y / scale <= boardBottom
+            }
+            .take(25)
+
+        // A real carrom position should contain several piece-like circles.
+        // Until that minimum is met, return no detections and draw no aiming marks.
+        if (boardCandidates.size < 6) return emptyList()
+        return boardCandidates
     }
 }
 
@@ -257,12 +276,16 @@ class AimOverlay(context: Context) : View(context) {
     override fun onDraw(c: Canvas) {
         super.onDraw(c)
         val list = discs
+        // Fail closed: never draw circles or paths unless a plausible board position exists.
+        if (list.size < 6) {
+            c.drawText("بانتظار التعرّف على طاولة كاروم...", 20f, 42f, textPaint)
+            return
+        }
         list.forEach { c.drawCircle(it.x, it.y, it.radius, discPaint) }
         val striker = list.maxByOrNull { it.y }
         if (striker != null) c.drawCircle(striker.x, striker.y, striker.radius + 5f, strikerPaint)
-        val rays = CarromPhysics.predict(list, screenW * .06f, screenH * .12f, screenW * .94f, screenH * .88f)
+        val rays = CarromPhysics.predict(list, screenW * .03f, screenH * .08f, screenW * .97f, screenH * .92f)
         rays.forEach { c.drawLine(it.x1, it.y1, it.x2, it.y2, pathPaint) }
         c.drawText("CarromAimPro | أقراص مرصودة: ${list.size}", 20f, 38f, textPaint)
-        if (list.isEmpty()) c.drawText("لم يتم تمييز الأقراص؛ تحقق من ظهور الطاولة", 20f, 76f, textPaint)
     }
 }
