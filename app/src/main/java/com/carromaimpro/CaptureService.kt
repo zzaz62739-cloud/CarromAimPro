@@ -74,7 +74,7 @@ class CaptureService : Service() {
     }
 }
 
-data class Disc(val x: Float, val y: Float, val radius: Float)
+data class Disc(val x: Float, val y: Float, val radius: Float, val kind: Int = 0)
 
 object DiscVision {
     private data class Candidate(val disc: Disc, val score: Int, val kind: Int)
@@ -143,7 +143,7 @@ object DiscVision {
                         radius += 2
                     }
                     if (bestRadius > 0) {
-                        val candidate = Disc(x * scale, y * scale, bestRadius * scale)
+                        val candidate = Disc(x * scale, y * scale, bestRadius * scale, kind)
                         if (candidates.none {
                                 hypot(it.disc.x - candidate.x, it.disc.y - candidate.y) <
                                     min(it.disc.radius, candidate.radius) * 1.35f
@@ -278,7 +278,7 @@ object CarromPhysics {
             if (abs(x[i] - lastX[i]) + abs(y[i] - lastY[i]) > 1f)
                 paths.add(Ray(lastX[i], lastY[i], x[i], y[i], i))
         }
-        return Result(paths, (0 until n).map { Disc(x[it], y[it], radius[it]) })
+        return Result(paths, (0 until n).map { Disc(x[it], y[it], radius[it], discs[it].kind) })
     }
 
     fun predict(discs: List<Disc>, left: Float, top: Float, right: Float, bottom: Float): List<Ray> =
@@ -287,6 +287,8 @@ object CarromPhysics {
 
 class AimOverlay(context: Context) : View(context) {
     private val discPaint = Paint(3).apply { color = Color.CYAN; style = Paint.Style.STROKE; strokeWidth = 3f }
+    private val pieceFill = Paint(3).apply { style = Paint.Style.FILL; alpha = 105 }
+    private val pieceStroke = Paint(3).apply { style = Paint.Style.STROKE; strokeWidth = 3f }
     private val strikerPaint = Paint(3).apply { color = Color.GREEN; style = Paint.Style.STROKE; strokeWidth = 5f }
     private val pathPaint = Paint(3).apply { color = Color.YELLOW; style = Paint.Style.STROKE; strokeWidth = 5f }
     private val textPaint = Paint(3).apply { color = Color.WHITE; textSize = 28f; setShadowLayer(5f, 1f, 1f, Color.BLACK) }
@@ -299,13 +301,22 @@ class AimOverlay(context: Context) : View(context) {
         // Fail closed: never draw circles or paths unless a plausible board position exists.
         // Keep the overlay completely invisible until a plausible board is detected.
         if (list.size < 6) return
-        list.forEach { c.drawCircle(it.x, it.y, it.radius, discPaint) }
+        list.forEach {
+            val color = when (it.kind) { 1 -> Color.WHITE; 2 -> Color.BLACK; 3 -> Color.RED; else -> Color.CYAN }
+            pieceFill.color = color
+            pieceStroke.color = if (it.kind == 2) Color.WHITE else color
+            c.drawCircle(it.x, it.y, it.radius, pieceFill)
+            c.drawCircle(it.x, it.y, it.radius, pieceStroke)
+        }
         val striker = list.maxByOrNull { it.y }
         if (striker != null) c.drawCircle(striker.x, striker.y, striker.radius + 5f, strikerPaint)
         val simulation = CarromPhysics.simulate(list, screenW * .03f, screenH * .08f, screenW * .97f, screenH * .92f)
         simulation.paths.forEach { c.drawLine(it.x1, it.y1, it.x2, it.y2, pathPaint) }
         val ghostPaint = Paint(3).apply { color = Color.MAGENTA; style = Paint.Style.STROKE; strokeWidth = 2f; alpha = 150 }
-        simulation.finalDiscs.forEach { c.drawCircle(it.x, it.y, it.radius, ghostPaint) }
+        simulation.finalDiscs.forEach {
+            ghostPaint.color = when (it.kind) { 1 -> Color.GREEN; 2 -> Color.LTGRAY; 3 -> Color.MAGENTA; else -> Color.MAGENTA }
+            c.drawCircle(it.x, it.y, it.radius, ghostPaint)
+        }
         c.drawText("مسارات تقديرية لكل الأقراص: ${list.size}", 20f, 38f, textPaint)
     }
 }
