@@ -279,13 +279,60 @@ object DiscVision {
 object CarromPhysics {
     data class Ray(val x1: Float, val y1: Float, val x2: Float, val y2: Float, val discIndex: Int = 0)
     data class Result(val paths: List<Ray>, val finalDiscs: List<Disc>)
+    data class ShotPlan(val strikerX: Float, val strikerY: Float, val ghostX: Float, val ghostY: Float,
+                        val coinX: Float, val coinY: Float, val pocketX: Float, val pocketY: Float,
+                        val score: Float)
+
+    fun bestPlans(discs: List<Disc>, left: Float, top: Float, right: Float, bottom: Float): List<ShotPlan> {
+        val striker = discs.firstOrNull { it.kind == 4 } ?: discs.maxByOrNull { it.y } ?: return emptyList()
+        val pockets = listOf(
+            left + (right-left)*0.045f to top + (bottom-top)*0.045f,
+            right - (right-left)*0.045f to top + (bottom-top)*0.045f,
+            left + (right-left)*0.045f to bottom - (bottom-top)*0.045f,
+            right - (right-left)*0.045f to bottom - (bottom-top)*0.045f
+        )
+        fun pointSegmentDistance(px: Float, py: Float, ax: Float, ay: Float, bx: Float, by: Float): Float {
+            val dx=bx-ax; val dy=by-ay
+            val den=dx*dx+dy*dy
+            if(den<0.001f)return hypot(px-ax,py-ay)
+            val t=(((px-ax)*dx+(py-ay)*dy)/den).coerceIn(0f,1f)
+            return hypot(px-(ax+t*dx),py-(ay+t*dy))
+        }
+        fun clear(ax:Float,ay:Float,bx:Float,by:Float,ignoreA:Disc,ignoreB:Disc?):Boolean {
+            return discs.all { d ->
+                if(d===ignoreA || d===ignoreB) true
+                else pointSegmentDistance(d.x,d.y,ax,ay,bx,by) > d.radius + striker.radius*0.82f
+            }
+        }
+        val plans=ArrayList<ShotPlan>()
+        for(coin in discs) {
+            if(coin===striker || coin.kind==4)continue
+            for(pk in pockets) {
+                val vx=pk.first-coin.x; val vy=pk.second-coin.y
+                val len=hypot(vx,vy).coerceAtLeast(0.01f)
+                val ux=vx/len; val uy=vy/len
+                val ghostX=coin.x-ux*(coin.radius+striker.radius)
+                val ghostY=coin.y-uy*(coin.radius+striker.radius)
+                if(ghostX<left+striker.radius || ghostX>right-striker.radius ||
+                    ghostY<top+striker.radius || ghostY>bottom-striker.radius)continue
+                if(!clear(coin.x,coin.y,pk.first,pk.second,coin,striker))continue
+                if(!clear(striker.x,striker.y,ghostX,ghostY,striker,coin))continue
+                val approach=hypot(ghostX-striker.x,ghostY-striker.y)
+                val cutPenalty=abs((striker.x-ghostX)*(coin.y-ghostY)-(striker.y-ghostY)*(coin.x-ghostX))
+                val score=approach+len*0.58f+cutPenalty/(striker.radius+coin.radius).coerceAtLeast(1f)*0.16f
+                plans.add(ShotPlan(striker.x,striker.y,ghostX,ghostY,coin.x,coin.y,pk.first,pk.second,score))
+            }
+        }
+        return plans.sortedBy { it.score }.take(4)
+    }
 
     // Multi-body 2D simulation: equal-mass impacts, cushion restitution and rolling friction.
     // The initial shot is inferred from the detected striker toward the nearest object coin.
-    fun simulate(discs: List<Disc>, left: Float, top: Float, right: Float, bottom: Float): Result {
+    fun simulate(discs: List<Disc>, left: Float, top: Float, right: Float, bottom: Float, aimX: Float? = null, aimY: Float? = null): Result {
         if (discs.size < 2) return Result(emptyList(), discs)
-        val strikerIndex = discs.indices.maxByOrNull { discs[it].y } ?: return Result(emptyList(), discs)
-        val targetIndex = discs.indices.filter { it != strikerIndex }
+        val strikerIndex = discs.indices.firstOrNull { discs[it].kind == 4 }
+            ?: (discs.indices.maxByOrNull { discs[it].y } ?: return Result(emptyList(), discs))
+        val targetIndex = discs.indices.filter { it != strikerIndex && discs[it].kind != 4 }
             .minByOrNull { hypot(discs[it].x - discs[strikerIndex].x, discs[it].y - discs[strikerIndex].y) }
             ?: return Result(emptyList(), discs)
 
@@ -299,11 +346,11 @@ object CarromPhysics {
         val lastX = x.copyOf()
         val lastY = y.copyOf()
 
-        val dx = x[targetIndex] - x[strikerIndex]
-        val dy = y[targetIndex] - y[strikerIndex]
+        val dx = (aimX ?: x[targetIndex]) - x[strikerIndex]
+        val dy = (aimY ?: y[targetIndex]) - y[strikerIndex]
         val len = hypot(dx, dy).coerceAtLeast(1f)
-        // Screen-space speed is scaled to board size, not device resolution.
-        val speed = (right - left) * 1.15f
+        // Use the selected ghost-ball contact point when available.
+        val speed = (right - left) * 1.08f
         vx[strikerIndex] = dx / len * speed
         vy[strikerIndex] = dy / len * speed
 
@@ -393,13 +440,26 @@ class AimOverlay(context: Context) : View(context) {
             c.drawCircle(it.x, it.y, it.radius, pieceFill)
             c.drawCircle(it.x, it.y, it.radius, pieceStroke)
         }
-        val striker = list.maxByOrNull { it.y }
+        val striker = list.firstOrNull { it.kind == 4 } ?: list.maxByOrNull { it.y }
         if (striker != null) c.drawCircle(striker.x, striker.y, striker.radius + 5f, strikerPaint)
         if (piecesMoving) {
             c.drawText("تتبع حركة الأقراص...", 20f, 38f, textPaint)
             return
         }
-        val simulation = CarromPhysics.simulate(list, board.left, board.top, board.right, board.bottom)
+        val plans = CarromPhysics.bestPlans(list, board.left, board.top, board.right, board.bottom)
+        val best = plans.firstOrNull()
+        if (best != null) {
+            val aimPaint = Paint(3).apply { color = Color.YELLOW; style = Paint.Style.STROKE; strokeWidth = 5f }
+            val coinPaint = Paint(3).apply { color = Color.GREEN; style = Paint.Style.STROKE; strokeWidth = 4f }
+            c.drawLine(best.strikerX, best.strikerY, best.ghostX, best.ghostY, aimPaint)
+            c.drawLine(best.coinX, best.coinY, best.pocketX, best.pocketY, coinPaint)
+            c.drawCircle(best.ghostX, best.ghostY, (striker?.radius ?: 10f)*0.75f, aimPaint)
+            plans.drop(1).forEachIndexed { index, plan ->
+                val alt = Paint(3).apply { color = 0x88FFFFFF.toInt(); style = Paint.Style.STROKE; strokeWidth = 2f }
+                c.drawLine(plan.strikerX, plan.strikerY, plan.ghostX, plan.ghostY, alt)
+            }
+        }
+        val simulation = CarromPhysics.simulate(list, board.left, board.top, board.right, board.bottom, best?.ghostX, best?.ghostY)
         simulation.paths.forEach { c.drawLine(it.x1, it.y1, it.x2, it.y2, pathPaint) }
         val ghostPaint = Paint(3).apply { color = Color.MAGENTA; style = Paint.Style.STROKE; strokeWidth = 2f; alpha = 150 }
         simulation.finalDiscs.forEach {
