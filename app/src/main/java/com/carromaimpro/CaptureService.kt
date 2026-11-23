@@ -119,6 +119,13 @@ class DiscTracker {
             val measuredVx = (next.x - track.disc.x) / elapsed
             val measuredVy = (next.y - track.disc.y) / elapsed
             val speed = hypot(measuredVx, measuredVy)
+            val previousSpeed = hypot(track.vx, track.vy)
+            val bounds = DiscVision.currentBoardBounds()
+            val bounced = bounds != null && (
+                (track.vx * measuredVx < 0f && (next.x < bounds.left + next.radius * 2.5f || next.x > bounds.right - next.radius * 2.5f)) ||
+                (track.vy * measuredVy < 0f && (next.y < bounds.top + next.radius * 2.5f || next.y > bounds.bottom - next.radius * 2.5f))
+            )
+            PhysicsCalibration.observe(previousSpeed, speed, elapsed, bounced)
             track.vx = track.vx * 0.35f + measuredVx * 0.65f
             track.vy = track.vy * 0.35f + measuredVy * 0.65f
             if (speed >= 7.5f) {
@@ -476,8 +483,8 @@ object CarromPhysics {
         vy[strikerIndex] = dy / len * speed
 
         val dt = 1f / 60f
-        val friction = 0.992f
-        val restitution = 0.86f
+        val friction = PhysicsCalibration.frictionPerFrame
+        val restitution = PhysicsCalibration.cushionRestitution
         val maxSteps = 900
         for (step in 0 until maxSteps) {
             var energy = 0f
