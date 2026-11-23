@@ -82,7 +82,7 @@ data class Disc(val x: Float, val y: Float, val radius: Float, val kind: Int = 0
 
 class DiscTracker {
     data class Snapshot(val discs: List<Disc>, val isMoving: Boolean)
-    private data class Track(var disc: Disc, var lastSeen: Long, var stableFrames: Int)
+    private data class Track(var disc: Disc, var lastSeen: Long, var stableFrames: Int, var vx: Float = 0f, var vy: Float = 0f)
     private data class Match(val trackIndex: Int, val detectionIndex: Int, val distance: Float)
     private val tracks = ArrayList<Track>()
 
@@ -96,8 +96,11 @@ class DiscTracker {
             for (di in detections.indices) {
                 val detected = detections[di]
                 if (detected.kind != track.disc.kind) continue
-                val distance = hypot(detected.x - track.disc.x, detected.y - track.disc.y)
-                val gate = max(22f, track.disc.radius * 2.8f)
+                val dt = ((timestamp - track.lastSeen).coerceAtLeast(1L) / 1000f).coerceAtMost(0.8f)
+                val predictedX = track.disc.x + track.vx * dt
+                val predictedY = track.disc.y + track.vy * dt
+                val distance = hypot(detected.x - predictedX, detected.y - predictedY)
+                val gate = max(28f, track.disc.radius * 3.5f)
                 if (distance <= gate) matches.add(Match(ti, di, distance))
             }
         }
@@ -110,9 +113,14 @@ class DiscTracker {
             if (!usedTracks.add(match.trackIndex) || !usedDetections.add(match.detectionIndex)) continue
             val track = tracks[match.trackIndex]
             val next = detections[match.detectionIndex]
-            val elapsed = (timestamp - track.lastSeen).coerceAtLeast(1L) / 1000f
-            val distance = hypot(next.x - track.disc.x, next.y - track.disc.y)
-            val speed = distance / elapsed
+            val elapsed = ((timestamp - track.lastSeen).coerceAtLeast(1L) / 1000f).coerceAtMost(0.8f)
+            val predictedX = track.disc.x + track.vx * elapsed
+            val predictedY = track.disc.y + track.vy * elapsed
+            val measuredVx = (next.x - track.disc.x) / elapsed
+            val measuredVy = (next.y - track.disc.y) / elapsed
+            val speed = hypot(measuredVx, measuredVy)
+            track.vx = track.vx * 0.35f + measuredVx * 0.65f
+            track.vy = track.vy * 0.35f + measuredVy * 0.65f
             if (speed >= 7.5f) {
                 track.stableFrames = 0
                 moving = true
@@ -121,8 +129,8 @@ class DiscTracker {
             }
             val blend = if (speed >= 7.5f) 0.78f else 0.32f
             track.disc = Disc(
-                track.disc.x + (next.x - track.disc.x) * blend,
-                track.disc.y + (next.y - track.disc.y) * blend,
+                predictedX + (next.x - predictedX) * blend,
+                predictedY + (next.y - predictedY) * blend,
                 track.disc.radius * 0.65f + next.radius * 0.35f,
                 next.kind
             )
