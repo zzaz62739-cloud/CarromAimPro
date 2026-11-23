@@ -162,24 +162,86 @@ object DiscVision {
 
 object CarromPhysics {
     data class Ray(val x1: Float, val y1: Float, val x2: Float, val y2: Float)
+
+    // Simple equal-mass 2D collision estimate with cushion reflections.
+    // This is a visual estimate, not a calibrated game-engine simulation.
     fun predict(discs: List<Disc>, left: Float, top: Float, right: Float, bottom: Float): List<Ray> {
         if (discs.size < 2) return emptyList()
         val striker = discs.maxByOrNull { it.y } ?: return emptyList()
-        val target = discs.filter { it !== striker }.minByOrNull { hypot(it.x - striker.x, it.y - striker.y) } ?: return emptyList()
-        val dx = target.x - striker.x; val dy = target.y - striker.y
+        val target = discs.filter { it !== striker }
+            .minByOrNull { hypot(it.x - striker.x, it.y - striker.y) } ?: return emptyList()
+
+        val dx = target.x - striker.x
+        val dy = target.y - striker.y
         val length = hypot(dx, dy).coerceAtLeast(1f)
-        val ux = dx / length; val uy = dy / length
+        val ux = dx / length
+        val uy = dy / length
         val contactX = target.x - ux * (striker.radius + target.radius)
         val contactY = target.y - uy * (striker.radius + target.radius)
         val rays = ArrayList<Ray>()
         rays.add(Ray(striker.x, striker.y, contactX, contactY))
-        // Approximate straight post-impact target motion, stopping at the first board boundary.
-        val tx = target.x; val ty = target.y
-        val wallT = listOf(
-            if (ux > 0f) (right - target.radius - tx) / ux else if (ux < 0f) (left + target.radius - tx) / ux else Float.POSITIVE_INFINITY,
-            if (uy > 0f) (bottom - target.radius - ty) / uy else if (uy < 0f) (top + target.radius - ty) / uy else Float.POSITIVE_INFINITY
-        ).filter { it > 0f }.minOrNull() ?: 0f
-        if (wallT > 0f && wallT.isFinite()) rays.add(Ray(tx, ty, tx + ux * wallT, ty + uy * wallT))
+
+        var x = target.x
+        var y = target.y
+        var vx = ux
+        var vy = uy
+        val moving = discs.filter { it !== striker && it !== target }.toMutableList()
+        val radius = target.radius
+        repeat(5) {
+            var eventT = Float.POSITIVE_INFINITY
+            var eventType = 0 // 1=vertical wall, 2=horizontal wall, 3=disc
+            var hitDisc: Disc? = null
+
+            if (vx > 0f) {
+                val t = (right - radius - x) / vx
+                if (t > 1f && t < eventT) { eventT = t; eventType = 1; hitDisc = null }
+            } else if (vx < 0f) {
+                val t = (left + radius - x) / vx
+                if (t > 1f && t < eventT) { eventT = t; eventType = 1; hitDisc = null }
+            }
+            if (vy > 0f) {
+                val t = (bottom - radius - y) / vy
+                if (t > 1f && t < eventT) { eventT = t; eventType = 2; hitDisc = null }
+            } else if (vy < 0f) {
+                val t = (top + radius - y) / vy
+                if (t > 1f && t < eventT) { eventT = t; eventType = 2; hitDisc = null }
+            }
+
+            for (other in moving) {
+                val ox = other.x - x
+                val oy = other.y - y
+                val projection = ox * vx + oy * vy
+                if (projection <= 0f) continue
+                val perp2 = ox * ox + oy * oy - projection * projection
+                val sumR = radius + other.radius
+                if (perp2 >= sumR * sumR) continue
+                val t = projection - sqrt((sumR * sumR - perp2).coerceAtLeast(0f))
+                if (t > 1f && t < eventT) { eventT = t; eventType = 3; hitDisc = other }
+            }
+
+            if (!eventT.isFinite()) return@repeat
+            val nx = x + vx * eventT
+            val ny = y + vy * eventT
+            rays.add(Ray(x, y, nx, ny))
+            x = nx; y = ny
+
+            when (eventType) {
+                1 -> vx = -vx
+                2 -> vy = -vy
+                3 -> {
+                    val other = hitDisc ?: return@repeat
+                    val cx = other.x - x
+                    val cy = other.y - y
+                    val cl = hypot(cx, cy).coerceAtLeast(1f)
+                    val nxn = cx / cl
+                    val nyn = cy / cl
+                    val dot = vx * nxn + vy * nyn
+                    vx -= dot * nxn
+                    vy -= dot * nyn
+                    moving.remove(other)
+                }
+            }
+        }
         return rays
     }
 }
