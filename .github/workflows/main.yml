@@ -31,6 +31,17 @@ jobs:
         run: |
           printf '\n// Keep Java and Kotlin bytecode targets aligned\ntasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {\n    kotlinOptions { jvmTarget = "1.8" }\n}\n' >> project/app/build.gradle
 
+      - name: Fix custom View context
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("project/app/src/main/java/com/carromaimpro/MainActivity.kt")
+          s = p.read_text()
+          s = s.replace("setContentView(AimView())", "setContentView(AimView(this))")
+          s = s.replace("class AimView : View(this@MainActivity)", "class AimView(context: android.content.Context) : View(context)")
+          p.write_text(s)
+          PY
+
       - name: Inspect Kotlin source
         run: nl -ba project/app/src/main/java/com/carromaimpro/MainActivity.kt | sed -n '1,80p'
 
