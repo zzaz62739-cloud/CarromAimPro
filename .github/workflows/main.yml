@@ -27,6 +27,10 @@ jobs:
       - name: Extract project
         run: unzip -o CarromAimPro_GitHub.zip -d project 
 
+      - name: Align Java and Kotlin JVM targets
+        run: |
+          printf '\n// Keep Java and Kotlin bytecode targets aligned\ntasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {\n    kotlinOptions { jvmTarget = "1.8" }\n}\n' >> project/app/build.gradle
+
       - name: Build APK
         run: gradle -p project assembleDebug
 
