@@ -53,7 +53,7 @@ class CaptureService : Service() {
                 val detected = DiscVision.detect(frame)
                 frame.recycle()
                 val tracked = tracker.update(detected, now)
-                handler.post { overlay?.update(tracked.discs, dm.widthPixels, dm.heightPixels, tracked.isMoving) }
+                handler.post { overlay?.update(tracked.discs, dm.widthPixels, dm.heightPixels, tracked.isMoving, DiscVision.currentBoardBounds()) }
             } catch (_: Exception) {
             } finally { image.close() }
         }, handler)
@@ -140,7 +140,40 @@ class DiscTracker {
 }
 
 object DiscVision {
+    @Volatile private var detectedBoard: RectF? = null
+    fun currentBoardBounds(): RectF? = detectedBoard?.let { RectF(it) }
     private data class Candidate(val disc: Disc, val score: Int, val kind: Int)
+
+    private fun centeredBoard(w: Int, h: Int): RectF {
+        val side = min(w * 0.94f, h * 0.94f)
+        val cx = w / 2f; val cy = h / 2f
+        return RectF(cx-side/2f, cy-side/2f, cx+side/2f, cy+side/2f)
+    }
+
+    private fun findBoardBounds(px: IntArray, w: Int, h: Int): RectF? {
+        val step = max(2, w / 240)
+        fun orange(c: Int): Boolean {
+            val r=Color.red(c); val g=Color.green(c); val b=Color.blue(c)
+            return r>125 && g>45 && g<185 && b<105 && r>g*1.22f && r-b>65
+        }
+        val rows=IntArray(h)
+        var y=0
+        while(y<h){ var x=0; while(x<w){ if(orange(px[y*w+x])) rows[y]++; x+=step }; y+=step }
+        val rowThreshold=max(3,w/(step*24))
+        var top=-1; var bottom=-1; y=0
+        while(y<h){ if(rows[y]>=rowThreshold){if(top<0)top=y;bottom=y}; y+=step }
+        if(top<0 || bottom-top<h*0.18f)return null
+        val colThreshold=max(3,(bottom-top)/(step*24))
+        var left=-1; var right=-1; var x=0
+        while(x<w){ var hits=0; var yy=top; while(yy<=bottom){if(orange(px[yy*w+x]))hits++;yy+=step}; if(hits>=colThreshold){if(left<0)left=x;right=x};x+=step }
+        if(left<0 || right-left<w*0.20f)return null
+        val bw=(right-left).toFloat(); val bh=(bottom-top).toFloat()
+        if(bw/bh !in 0.72f..1.38f)return null
+        val side=min(bw,bh); val cx=(left+right)/2f; val cy=(top+bottom)/2f
+        val inset=side*0.018f
+        return RectF(max(0f,cx-side/2f+inset),max(0f,cy-side/2f+inset),
+            min(w.toFloat(),cx+side/2f-inset),min(h.toFloat(),cy+side/2f-inset))
+    }
 
     // Color-aware, coarse scan: recognizes common white, black and red carrom pieces.
     // Coordinates are mapped back to the original screen for the overlay.
@@ -155,13 +188,15 @@ object DiscVision {
         small.getPixels(pixels, 0, w, 0, 0, w, h)
         small.recycle()
 
+        val board = findBoardBounds(pixels, w, h) ?: centeredBoard(w, h)
+        detectedBoard = RectF(board.left*scale, board.top*scale, board.right*scale, board.bottom*scale)
         val minR = max(6, w / 72)
         val maxR = max(minR + 2, w / 32)
         val step = max(3, w / 120)
-        val x0 = (w * 0.07f).toInt()
-        val x1 = (w * 0.93f).toInt()
-        val y0 = (h * 0.12f).toInt()
-        val y1 = (h * 0.88f).toInt()
+        val x0 = max(0, board.left.toInt())
+        val x1 = min(w, board.right.toInt())
+        val y0 = max(0, board.top.toInt())
+        val y1 = min(h, board.bottom.toInt())
         val candidates = ArrayList<Candidate>()
 
         fun pieceColor(c: Int): Int {
@@ -219,42 +254,25 @@ object DiscVision {
             }
             y += step
         }
-        // Accept pieces only inside the centered, approximately square play area.
-        // This rejects most unrelated colored UI elements elsewhere on the phone screen.
-        val boardSize = min(w * 0.94f, h * 0.94f)
-        val boardLeft = (w - boardSize) / 2f
-        val boardTop = (h - boardSize) / 2f
-        val boardRight = boardLeft + boardSize
-        val boardBottom = boardTop + boardSize
-        val boardCandidates = candidates
-            .sortedByDescending { it.score }
-            .map { it.disc }
-            .filter {
-                it.x / scale >= boardLeft && it.x / scale <= boardRight &&
-                it.y / scale >= boardTop && it.y / scale <= boardBottom
-            }
-            .take(25)
-
-        // Fail closed: a phone screen without a carrom board must not produce marks.
-        // Require multiple piece colors and a striker-like piece in the lower board area.
-        val selected = candidates
-            .sortedByDescending { it.score }
-            .filter {
-                it.disc.x / scale >= boardLeft && it.disc.x / scale <= boardRight &&
-                it.disc.y / scale >= boardTop && it.disc.y / scale <= boardBottom
-            }
-            .take(25)
+        // Reject HUD elements outside the board detected in the captured frame.
+        val selected = candidates.sortedByDescending { it.score }.filter {
+            it.disc.x/scale >= board.left && it.disc.x/scale <= board.right &&
+            it.disc.y/scale >= board.top && it.disc.y/scale <= board.bottom
+        }.take(25)
         val distinctKinds = selected.map { it.kind }.distinct().size
-        val hasLowerPiece = selected.any {
-            it.disc.y / scale > boardTop + boardSize * 0.68f
-        }
-        val xs = selected.map { it.disc.x / scale }
-        val ys = selected.map { it.disc.y / scale }
-        val spreadX = if (xs.isEmpty()) 0f else xs.maxOrNull()!! - xs.minOrNull()!!
-        val spreadY = if (ys.isEmpty()) 0f else ys.maxOrNull()!! - ys.minOrNull()!!
-        if (selected.size < 6 || distinctKinds < 2 || !hasLowerPiece ||
-            spreadX > boardSize * 0.82f || spreadY > boardSize * 0.82f) return emptyList()
-        return selected.map { it.disc }
+        val boardHeight = board.height()
+        val hasLowerPiece = selected.any { it.disc.y/scale > board.top + boardHeight*0.68f }
+        val xs = selected.map { it.disc.x/scale }; val ys = selected.map { it.disc.y/scale }
+        val spreadX = if(xs.isEmpty()) 0f else xs.maxOrNull()!!-xs.minOrNull()!!
+        val spreadY = if(ys.isEmpty()) 0f else ys.maxOrNull()!!-ys.minOrNull()!!
+        if(selected.size<6 || distinctKinds<2 || !hasLowerPiece ||
+            spreadX>board.width()*0.82f || spreadY>board.height()*0.82f) return emptyList()
+        // Mark the largest white piece in the lower baseline region as the striker.
+        val white = selected.filter { it.kind==1 && it.disc.y/scale > board.top+boardHeight*0.64f }
+        val striker = white.maxByOrNull { it.disc.radius }
+        return selected.map { if(striker!=null && it===striker)
+            Disc(it.disc.x,it.disc.y,it.disc.radius,4) else it.disc }
+
     }
 }
 
@@ -358,15 +376,18 @@ class AimOverlay(context: Context) : View(context) {
     @Volatile private var discs: List<Disc> = emptyList()
     @Volatile private var piecesMoving: Boolean = false
     private var screenW = 1f; private var screenH = 1f
-    fun update(items: List<Disc>, w: Int, h: Int, moving: Boolean) { discs = items; screenW = w.toFloat(); screenH = h.toFloat(); piecesMoving = moving; postInvalidate() }
+    @Volatile private var boardBounds: RectF? = null
+    fun update(items: List<Disc>, w: Int, h: Int, moving: Boolean, board: RectF?) { discs = items; screenW = w.toFloat(); screenH = h.toFloat(); boardBounds = board; piecesMoving = moving; postInvalidate() }
     override fun onDraw(c: Canvas) {
         super.onDraw(c)
         val list = discs
         // Fail closed: never draw circles or paths unless a plausible board position exists.
         // Keep the overlay completely invisible until a plausible board is detected.
+        val board = boardBounds ?: return
         if (list.size < 6) return
+        c.drawRect(board, Paint(3).apply { color = 0x88FFD700.toInt(); style = Paint.Style.STROKE; strokeWidth = 3f })
         list.forEach {
-            val color = when (it.kind) { 1 -> Color.WHITE; 2 -> Color.BLACK; 3 -> Color.RED; else -> Color.CYAN }
+            val color = when (it.kind) { 1, 4 -> Color.WHITE; 2 -> Color.BLACK; 3 -> Color.RED; else -> Color.CYAN }
             pieceFill.color = color
             pieceStroke.color = if (it.kind == 2) Color.WHITE else color
             c.drawCircle(it.x, it.y, it.radius, pieceFill)
@@ -378,7 +399,7 @@ class AimOverlay(context: Context) : View(context) {
             c.drawText("تتبع حركة الأقراص...", 20f, 38f, textPaint)
             return
         }
-        val simulation = CarromPhysics.simulate(list, screenW * .03f, screenH * .08f, screenW * .97f, screenH * .92f)
+        val simulation = CarromPhysics.simulate(list, board.left, board.top, board.right, board.bottom)
         simulation.paths.forEach { c.drawLine(it.x1, it.y1, it.x2, it.y2, pathPaint) }
         val ghostPaint = Paint(3).apply { color = Color.MAGENTA; style = Paint.Style.STROKE; strokeWidth = 2f; alpha = 150 }
         simulation.finalDiscs.forEach {
