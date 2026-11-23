@@ -1,55 +1,22 @@
 name: Build CarromAimPro APK
-
 on:
   workflow_dispatch:
   push:
     branches: [main]
-
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Java
-        uses: actions/setup-java@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-
-      - name: Extract project
-        run: unzip -o CarromAimPro_GitHub.zip -d project 
-
-      - name: Align Java and Kotlin JVM targets
-        run: |
-          printf '\n// Keep Java and Kotlin bytecode targets aligned\ntasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {\n    kotlinOptions { jvmTarget = "1.8" }\n}\n' >> project/app/build.gradle
-
-      - name: Fix custom View context
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path("project/app/src/main/java/com/carromaimpro/MainActivity.kt")
-          s = p.read_text()
-          s = s.replace("setContentView(AimView())", "setContentView(AimView(this))")
-          s = s.replace("class AimView : View(this@MainActivity)", "class AimView(context: android.content.Context) : View(context)")
-          p.write_text(s)
-          PY
-
-      - name: Inspect Kotlin source
-        run: nl -ba project/app/src/main/java/com/carromaimpro/MainActivity.kt | sed -n '1,80p'
-
-      - name: Build APK
-        run: gradle -p project assembleDebug
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
+      - run: gradle assembleDebug
+      - uses: actions/upload-artifact@v4
         with:
           name: CarromAimPro-APK
-          path: project/app/build/outputs/apk/debug/app-debug.apk
+          path: app/build/outputs/apk/debug/app-debug.apk
