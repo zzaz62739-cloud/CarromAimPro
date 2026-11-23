@@ -80,56 +80,61 @@ data class Disc(val x: Float, val y: Float, val radius: Float, val kind: Int = 0
 
 class DiscTracker {
     data class Snapshot(val discs: List<Disc>, val isMoving: Boolean)
-    private data class Track(var disc: Disc, var vx: Float, var vy: Float, var lastSeen: Long, var stableFrames: Int)
+    private data class Track(var disc: Disc, var lastSeen: Long, var stableFrames: Int)
+    private data class Match(val trackIndex: Int, val detectionIndex: Int, val distance: Float)
     private val tracks = ArrayList<Track>()
 
     @Synchronized
     fun update(detections: List<Disc>, timestamp: Long): Snapshot {
-        val used = HashSet<Int>()
-        var moving = false
-        for (track in tracks) {
-            var best = -1
-            var bestDistance = Float.MAX_VALUE
-            for (i in detections.indices) {
-                if (i in used || detections[i].kind != track.disc.kind) continue
-                val d = detections[i]
-                val distance = hypot(d.x - track.disc.x, d.y - track.disc.y)
-                if (distance < max(24f, track.disc.radius * 3.2f) && distance < bestDistance) {
-                    best = i
-                    bestDistance = distance
-                }
-            }
-            if (best >= 0) {
-                used.add(best)
-                val next = detections[best]
-                val seconds = ((timestamp - track.lastSeen).coerceAtLeast(1L) / 1000f)
-                val rawVx = (next.x - track.disc.x) / seconds
-                val rawVy = (next.y - track.disc.y) / seconds
-                track.vx = track.vx * 0.35f + rawVx * 0.65f
-                track.vy = track.vy * 0.35f + rawVy * 0.65f
-                val speed = hypot(track.vx, track.vy)
-                if (speed < 10f) {
-                    track.stableFrames++
-                    track.vx = 0f
-                    track.vy = 0f
-                } else {
-                    track.stableFrames = 0
-                    moving = true
-                }
-                val blend = if (speed < 10f) 0.28f else 0.82f
-                track.disc = Disc(
-                    track.disc.x + (next.x - track.disc.x) * blend,
-                    track.disc.y + (next.y - track.disc.y) * blend,
-                    track.disc.radius * 0.65f + next.radius * 0.35f,
-                    next.kind
-                )
-                track.lastSeen = timestamp
+        // Match globally by shortest distance so one detection cannot be claimed by
+        // multiple tracks when pieces cross or briefly overlap.
+        val matches = ArrayList<Match>()
+        for (ti in tracks.indices) {
+            val track = tracks[ti]
+            for (di in detections.indices) {
+                val detected = detections[di]
+                if (detected.kind != track.disc.kind) continue
+                val distance = hypot(detected.x - track.disc.x, detected.y - track.disc.y)
+                val gate = max(22f, track.disc.radius * 2.8f)
+                if (distance <= gate) matches.add(Match(ti, di, distance))
             }
         }
-        for (i in detections.indices) if (i !in used) tracks.add(Track(detections[i], 0f, 0f, timestamp, 0))
-        tracks.removeAll { timestamp - it.lastSeen > 1800L }
-        val visible = tracks.filter { timestamp - it.lastSeen < 1100L }.map { it.disc }
-        val unsettled = tracks.any { it.stableFrames < 3 && timestamp - it.lastSeen < 1100L }
+        matches.sortBy { it.distance }
+        val usedTracks = HashSet<Int>()
+        val usedDetections = HashSet<Int>()
+        var moving = false
+
+        for (match in matches) {
+            if (!usedTracks.add(match.trackIndex) || !usedDetections.add(match.detectionIndex)) continue
+            val track = tracks[match.trackIndex]
+            val next = detections[match.detectionIndex]
+            val elapsed = (timestamp - track.lastSeen).coerceAtLeast(1L) / 1000f
+            val distance = hypot(next.x - track.disc.x, next.y - track.disc.y)
+            val speed = distance / elapsed
+            if (speed >= 7.5f) {
+                track.stableFrames = 0
+                moving = true
+            } else {
+                track.stableFrames++
+            }
+            val blend = if (speed >= 7.5f) 0.78f else 0.32f
+            track.disc = Disc(
+                track.disc.x + (next.x - track.disc.x) * blend,
+                track.disc.y + (next.y - track.disc.y) * blend,
+                track.disc.radius * 0.65f + next.radius * 0.35f,
+                next.kind
+            )
+            track.lastSeen = timestamp
+        }
+
+        for (i in detections.indices) {
+            if (i !in usedDetections) tracks.add(Track(detections[i], timestamp, 0))
+        }
+        tracks.removeAll { timestamp - it.lastSeen > 1400L }
+        val visibleTracks = tracks.filter { timestamp - it.lastSeen < 900L }
+        val visible = visibleTracks.map { it.disc }
+        // Wait for three consecutive quiet observations before drawing a prediction.
+        val unsettled = visibleTracks.any { it.stableFrames < 3 }
         return Snapshot(visible, moving || unsettled)
     }
 }
