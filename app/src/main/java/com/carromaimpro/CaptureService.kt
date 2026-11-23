@@ -18,6 +18,7 @@ class CaptureService : Service() {
     private var overlay: AimOverlay? = null
     private val handler = Handler(Looper.getMainLooper())
     private var lastAnalysis = 0L
+    private val tracker = DiscTracker()
 
     override fun onBind(intent: Intent?) = null
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -49,9 +50,10 @@ class CaptureService : Service() {
                 padded.copyPixelsFromBuffer(p.buffer)
                 val frame = Bitmap.createBitmap(padded, 0, 0, image.width, image.height)
                 padded.recycle()
-                val circles = DiscVision.detect(frame)
+                val detected = DiscVision.detect(frame)
                 frame.recycle()
-                handler.post { overlay?.update(circles, dm.widthPixels, dm.heightPixels) }
+                val tracked = tracker.update(detected, now)
+                handler.post { overlay?.update(tracked.discs, dm.widthPixels, dm.heightPixels, tracked.isMoving) }
             } catch (_: Exception) {
             } finally { image.close() }
         }, handler)
@@ -75,6 +77,62 @@ class CaptureService : Service() {
 }
 
 data class Disc(val x: Float, val y: Float, val radius: Float, val kind: Int = 0)
+
+class DiscTracker {
+    data class Snapshot(val discs: List<Disc>, val isMoving: Boolean)
+    private data class Track(var disc: Disc, var vx: Float, var vy: Float, var lastSeen: Long, var stableFrames: Int)
+    private val tracks = ArrayList<Track>()
+
+    @Synchronized
+    fun update(detections: List<Disc>, timestamp: Long): Snapshot {
+        val used = HashSet<Int>()
+        var moving = false
+        for (track in tracks) {
+            var best = -1
+            var bestDistance = Float.MAX_VALUE
+            for (i in detections.indices) {
+                if (i in used || detections[i].kind != track.disc.kind) continue
+                val d = detections[i]
+                val distance = hypot(d.x - track.disc.x, d.y - track.disc.y)
+                if (distance < max(24f, track.disc.radius * 3.2f) && distance < bestDistance) {
+                    best = i
+                    bestDistance = distance
+                }
+            }
+            if (best >= 0) {
+                used.add(best)
+                val next = detections[best]
+                val seconds = ((timestamp - track.lastSeen).coerceAtLeast(1L) / 1000f)
+                val rawVx = (next.x - track.disc.x) / seconds
+                val rawVy = (next.y - track.disc.y) / seconds
+                track.vx = track.vx * 0.35f + rawVx * 0.65f
+                track.vy = track.vy * 0.35f + rawVy * 0.65f
+                val speed = hypot(track.vx, track.vy)
+                if (speed < 10f) {
+                    track.stableFrames++
+                    track.vx = 0f
+                    track.vy = 0f
+                } else {
+                    track.stableFrames = 0
+                    moving = true
+                }
+                val blend = if (speed < 10f) 0.28f else 0.82f
+                track.disc = Disc(
+                    track.disc.x + (next.x - track.disc.x) * blend,
+                    track.disc.y + (next.y - track.disc.y) * blend,
+                    track.disc.radius * 0.65f + next.radius * 0.35f,
+                    next.kind
+                )
+                track.lastSeen = timestamp
+            }
+        }
+        for (i in detections.indices) if (i !in used) tracks.add(Track(detections[i], 0f, 0f, timestamp, 0))
+        tracks.removeAll { timestamp - it.lastSeen > 1800L }
+        val visible = tracks.filter { timestamp - it.lastSeen < 1100L }.map { it.disc }
+        val unsettled = tracks.any { it.stableFrames < 3 && timestamp - it.lastSeen < 1100L }
+        return Snapshot(visible, moving || unsettled)
+    }
+}
 
 object DiscVision {
     private data class Candidate(val disc: Disc, val score: Int, val kind: Int)
@@ -293,8 +351,9 @@ class AimOverlay(context: Context) : View(context) {
     private val pathPaint = Paint(3).apply { color = Color.YELLOW; style = Paint.Style.STROKE; strokeWidth = 5f }
     private val textPaint = Paint(3).apply { color = Color.WHITE; textSize = 28f; setShadowLayer(5f, 1f, 1f, Color.BLACK) }
     @Volatile private var discs: List<Disc> = emptyList()
+    @Volatile private var piecesMoving: Boolean = false
     private var screenW = 1f; private var screenH = 1f
-    fun update(items: List<Disc>, w: Int, h: Int) { discs = items; screenW = w.toFloat(); screenH = h.toFloat(); postInvalidate() }
+    fun update(items: List<Disc>, w: Int, h: Int, moving: Boolean) { discs = items; screenW = w.toFloat(); screenH = h.toFloat(); piecesMoving = moving; postInvalidate() }
     override fun onDraw(c: Canvas) {
         super.onDraw(c)
         val list = discs
@@ -310,6 +369,10 @@ class AimOverlay(context: Context) : View(context) {
         }
         val striker = list.maxByOrNull { it.y }
         if (striker != null) c.drawCircle(striker.x, striker.y, striker.radius + 5f, strikerPaint)
+        if (piecesMoving) {
+            c.drawText("تتبع حركة الأقراص...", 20f, 38f, textPaint)
+            return
+        }
         val simulation = CarromPhysics.simulate(list, screenW * .03f, screenH * .08f, screenW * .97f, screenH * .92f)
         simulation.paths.forEach { c.drawLine(it.x1, it.y1, it.x2, it.y2, pathPaint) }
         val ghostPaint = Paint(3).apply { color = Color.MAGENTA; style = Paint.Style.STROKE; strokeWidth = 2f; alpha = 150 }
