@@ -40,7 +40,7 @@ class CaptureService : Service() {
         reader = ImageReader.newInstance(dm.widthPixels, dm.heightPixels, PixelFormat.RGBA_8888, 2)
         reader?.setOnImageAvailableListener({ r ->
             val now = SystemClock.elapsedRealtime()
-            if (now - lastAnalysis < 700) { r.acquireLatestImage()?.close(); return@setOnImageAvailableListener }
+            if (now - lastAnalysis < 250) { r.acquireLatestImage()?.close(); return@setOnImageAvailableListener }
             lastAnalysis = now
             val image = r.acquireLatestImage() ?: return@setOnImageAvailableListener
             try {
