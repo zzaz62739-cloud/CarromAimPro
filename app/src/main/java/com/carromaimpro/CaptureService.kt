@@ -433,6 +433,14 @@ object CarromPhysics {
         val paths = ArrayList<Ray>()
         val lastX = x.copyOf()
         val lastY = y.copyOf()
+        val active = BooleanArray(n) { true }
+        val pocketPoints = listOf(
+            left + (right-left)*0.045f to top + (bottom-top)*0.045f,
+            right - (right-left)*0.045f to top + (bottom-top)*0.045f,
+            left + (right-left)*0.045f to bottom - (bottom-top)*0.045f,
+            right - (right-left)*0.045f to bottom - (bottom-top)*0.045f
+        )
+        val pocketRadius = min(right-left, bottom-top) * 0.052f
 
         val dx = (aimX ?: x[targetIndex]) - x[strikerIndex]
         val dy = (aimY ?: y[targetIndex]) - y[strikerIndex]
@@ -449,9 +457,17 @@ object CarromPhysics {
         for (step in 0 until maxSteps) {
             var energy = 0f
             for (i in 0 until n) {
+                if (!active[i]) continue
                 if (abs(vx[i]) + abs(vy[i]) < 2f) { vx[i] = 0f; vy[i] = 0f; continue }
                 x[i] += vx[i] * dt
                 y[i] += vy[i] * dt
+                // Pocket capture: object coins disappear when their centers enter a corner pocket.
+                if (i != strikerIndex && pocketPoints.any { hypot(x[i]-it.first, y[i]-it.second) < pocketRadius }) {
+                    active[i] = false
+                    paths.add(Ray(lastX[i], lastY[i], x[i], y[i], i))
+                    vx[i] = 0f; vy[i] = 0f
+                    continue
+                }
                 if (x[i] < left + radius[i]) { x[i] = left + radius[i]; vx[i] = abs(vx[i]) * restitution }
                 if (x[i] > right - radius[i]) { x[i] = right - radius[i]; vx[i] = -abs(vx[i]) * restitution }
                 if (y[i] < top + radius[i]) { y[i] = top + radius[i]; vy[i] = abs(vy[i]) * restitution }
@@ -461,6 +477,7 @@ object CarromPhysics {
             // Resolve every overlapping pair; several passes stabilize dense clusters.
             repeat(3) {
                 for (i in 0 until n) for (j in i + 1 until n) {
+                    if (!active[i] || !active[j]) continue
                     var ox = x[j] - x[i]
                     var oy = y[j] - y[i]
                     val minDist = radius[i] + radius[j]
@@ -481,6 +498,7 @@ object CarromPhysics {
             }
 
             for (i in 0 until n) {
+                if (!active[i]) continue
                 vx[i] *= friction; vy[i] *= friction
                 energy += abs(vx[i]) + abs(vy[i])
                 if (step % 8 == 0 && (abs(x[i] - lastX[i]) + abs(y[i] - lastY[i]) > 2f)) {
@@ -491,10 +509,10 @@ object CarromPhysics {
             if (energy < 8f) break
         }
         for (i in 0 until n) {
-            if (abs(x[i] - lastX[i]) + abs(y[i] - lastY[i]) > 1f)
+            if (active[i] && abs(x[i] - lastX[i]) + abs(y[i] - lastY[i]) > 1f)
                 paths.add(Ray(lastX[i], lastY[i], x[i], y[i], i))
         }
-        return Result(paths, (0 until n).map { Disc(x[it], y[it], radius[it], discs[it].kind) })
+        return Result(paths, (0 until n).filter { active[it] }.map { Disc(x[it], y[it], radius[it], discs[it].kind) })
     }
 
     fun predict(discs: List<Disc>, left: Float, top: Float, right: Float, bottom: Float): List<Ray> =
