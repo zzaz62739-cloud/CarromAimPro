@@ -77,59 +77,86 @@ class CaptureService : Service() {
 data class Disc(val x: Float, val y: Float, val radius: Float)
 
 object DiscVision {
-    // Downsample before circle scoring so live analysis remains lightweight on phones.
+    private data class Candidate(val disc: Disc, val score: Int)
+
+    // Color-aware, coarse scan: recognizes common white, black and red carrom pieces.
+    // Coordinates are mapped back to the original screen for the overlay.
     fun detect(source: Bitmap): List<Disc> {
-        val targetW = 540
+        val targetW = 480
         val scale = source.width.toFloat() / targetW
         val targetH = max(1, (source.height / scale).roundToInt())
         val small = Bitmap.createScaledBitmap(source, targetW, targetH, true)
-        val w = small.width; val h = small.height
-        val px = IntArray(w * h)
-        small.getPixels(px, 0, w, 0, 0, w, h)
+        val w = small.width
+        val h = small.height
+        val pixels = IntArray(w * h)
+        small.getPixels(pixels, 0, w, 0, 0, w, h)
         small.recycle()
-        val gray = IntArray(px.size)
-        for (i in px.indices) {
-            val c = px[i]
-            gray[i] = ((Color.red(c) * 30 + Color.green(c) * 59 + Color.blue(c) * 11) / 100)
+
+        val minR = max(6, w / 72)
+        val maxR = max(minR + 2, w / 32)
+        val step = max(3, w / 120)
+        val x0 = (w * 0.07f).toInt()
+        val x1 = (w * 0.93f).toInt()
+        val y0 = (h * 0.12f).toInt()
+        val y1 = (h * 0.88f).toInt()
+        val candidates = ArrayList<Candidate>()
+
+        fun pieceColor(c: Int): Int {
+            val r = Color.red(c); val g = Color.green(c); val b = Color.blue(c)
+            val maxC = max(r, max(g, b)); val minC = min(r, min(g, b))
+            return when {
+                maxC > 185 && maxC - minC < 38 -> 1 // white
+                maxC < 78 -> 2 // black
+                r > 105 && r > g * 1.35 && r > b * 1.25 -> 3 // red
+                else -> 0
+            }
         }
-        val minR = max(5, w / 95); val maxR = max(minR + 2, w / 30)
-        val found = ArrayList<Disc>()
-        val x0 = (w * 0.06f).toInt(); val x1 = (w * 0.94f).toInt()
-        val y0 = (h * 0.12f).toInt(); val y1 = (h * 0.88f).toInt()
+
         var y = y0 + maxR
         while (y < y1 - maxR) {
             var x = x0 + maxR
             while (x < x1 - maxR) {
-                val center = gray[y * w + x]
-                // Ignore flat wood/background pixels; only score plausible piece interiors.
-                if (center < 238) {
-                    var bestR = 0; var bestScore = 0
+                val kind = pieceColor(pixels[y * w + x])
+                if (kind != 0) {
+                    var bestRadius = 0
+                    var bestScore = 0
                     var radius = minR
                     while (radius <= maxR) {
-                        var score = 0
-                        for (a in 0 until 12) {
-                            val angle = a * (Math.PI / 6.0)
-                            val ox = x + (cos(angle) * (radius - 2)).roundToInt()
-                            val oy = y + (sin(angle) * (radius - 2)).roundToInt()
+                        var same = 0
+                        var contrast = 0
+                        for (a in 0 until 16) {
+                            val angle = a * (Math.PI / 8.0)
                             val ix = x + (cos(angle) * radius).roundToInt()
                             val iy = y + (sin(angle) * radius).roundToInt()
-                            if (ix in 0 until w && iy in 0 until h && ox in 0 until w && oy in 0 until h &&
-                                abs(gray[iy * w + ix] - gray[oy * w + ox]) > 26) score++
+                            val ox = x + (cos(angle) * (radius * 0.55f)).roundToInt()
+                            val oy = y + (sin(angle) * (radius * 0.55f)).roundToInt()
+                            if (ix in 0 until w && iy in 0 until h && ox in 0 until w && oy in 0 until h) {
+                                if (pieceColor(pixels[oy * w + ox]) == kind) same++
+                                if (pieceColor(pixels[iy * w + ix]) != kind) contrast++
+                            }
                         }
-                        if (score > bestScore) { bestScore = score; bestR = radius }
+                        val score = same + contrast
+                        if (same >= 10 && contrast >= 8 && score > bestScore) {
+                            bestScore = score
+                            bestRadius = radius
+                        }
                         radius += 2
                     }
-                    if (bestScore >= 8 && bestR > 0) {
-                        val candidate = Disc(x * scale, y * scale, bestR * scale)
-                        if (found.none { hypot(it.x - candidate.x, it.y - candidate.y) < min(it.radius, candidate.radius) * 1.45f })
-                            found.add(candidate)
+                    if (bestRadius > 0) {
+                        val candidate = Disc(x * scale, y * scale, bestRadius * scale)
+                        if (candidates.none {
+                                hypot(it.disc.x - candidate.x, it.disc.y - candidate.y) <
+                                    min(it.disc.radius, candidate.radius) * 1.35f
+                            }) {
+                            candidates.add(Candidate(candidate, bestScore))
+                        }
                     }
                 }
-                x += max(3, minR / 2)
+                x += step
             }
-            y += max(3, minR / 2)
+            y += step
         }
-        return found.sortedByDescending { it.radius }.take(25)
+        return candidates.sortedByDescending { it.score }.take(25).map { it.disc }
     }
 }
 
