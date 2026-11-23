@@ -196,89 +196,93 @@ object DiscVision {
 }
 
 object CarromPhysics {
-    data class Ray(val x1: Float, val y1: Float, val x2: Float, val y2: Float)
+    data class Ray(val x1: Float, val y1: Float, val x2: Float, val y2: Float, val discIndex: Int = 0)
+    data class Result(val paths: List<Ray>, val finalDiscs: List<Disc>)
 
-    // Simple equal-mass 2D collision estimate with cushion reflections.
-    // This is a visual estimate, not a calibrated game-engine simulation.
-    fun predict(discs: List<Disc>, left: Float, top: Float, right: Float, bottom: Float): List<Ray> {
-        if (discs.size < 2) return emptyList()
-        val striker = discs.maxByOrNull { it.y } ?: return emptyList()
-        val target = discs.filter { it !== striker }
-            .minByOrNull { hypot(it.x - striker.x, it.y - striker.y) } ?: return emptyList()
+    // Multi-body 2D simulation: equal-mass impacts, cushion restitution and rolling friction.
+    // The initial shot is inferred from the detected striker toward the nearest object coin.
+    fun simulate(discs: List<Disc>, left: Float, top: Float, right: Float, bottom: Float): Result {
+        if (discs.size < 2) return Result(emptyList(), discs)
+        val strikerIndex = discs.indices.maxByOrNull { discs[it].y } ?: return Result(emptyList(), discs)
+        val targetIndex = discs.indices.filter { it != strikerIndex }
+            .minByOrNull { hypot(discs[it].x - discs[strikerIndex].x, discs[it].y - discs[strikerIndex].y) }
+            ?: return Result(emptyList(), discs)
 
-        val dx = target.x - striker.x
-        val dy = target.y - striker.y
-        val length = hypot(dx, dy).coerceAtLeast(1f)
-        val ux = dx / length
-        val uy = dy / length
-        val contactX = target.x - ux * (striker.radius + target.radius)
-        val contactY = target.y - uy * (striker.radius + target.radius)
-        val rays = ArrayList<Ray>()
-        rays.add(Ray(striker.x, striker.y, contactX, contactY))
+        val n = discs.size
+        val x = FloatArray(n) { discs[it].x }
+        val y = FloatArray(n) { discs[it].y }
+        val vx = FloatArray(n)
+        val vy = FloatArray(n)
+        val radius = FloatArray(n) { discs[it].radius }
+        val paths = ArrayList<Ray>()
+        val lastX = x.copyOf()
+        val lastY = y.copyOf()
 
-        var x = target.x
-        var y = target.y
-        var vx = ux
-        var vy = uy
-        val moving = discs.filter { it !== striker && it !== target }.toMutableList()
-        val radius = target.radius
-        repeat(5) {
-            var eventT = Float.POSITIVE_INFINITY
-            var eventType = 0 // 1=vertical wall, 2=horizontal wall, 3=disc
-            var hitDisc: Disc? = null
+        val dx = x[targetIndex] - x[strikerIndex]
+        val dy = y[targetIndex] - y[strikerIndex]
+        val len = hypot(dx, dy).coerceAtLeast(1f)
+        // Screen-space speed is scaled to board size, not device resolution.
+        val speed = (right - left) * 1.15f
+        vx[strikerIndex] = dx / len * speed
+        vy[strikerIndex] = dy / len * speed
 
-            if (vx > 0f) {
-                val t = (right - radius - x) / vx
-                if (t > 1f && t < eventT) { eventT = t; eventType = 1; hitDisc = null }
-            } else if (vx < 0f) {
-                val t = (left + radius - x) / vx
-                if (t > 1f && t < eventT) { eventT = t; eventType = 1; hitDisc = null }
-            }
-            if (vy > 0f) {
-                val t = (bottom - radius - y) / vy
-                if (t > 1f && t < eventT) { eventT = t; eventType = 2; hitDisc = null }
-            } else if (vy < 0f) {
-                val t = (top + radius - y) / vy
-                if (t > 1f && t < eventT) { eventT = t; eventType = 2; hitDisc = null }
-            }
-
-            for (other in moving) {
-                val ox = other.x - x
-                val oy = other.y - y
-                val projection = ox * vx + oy * vy
-                if (projection <= 0f) continue
-                val perp2 = ox * ox + oy * oy - projection * projection
-                val sumR = radius + other.radius
-                if (perp2 >= sumR * sumR) continue
-                val t = projection - sqrt((sumR * sumR - perp2).coerceAtLeast(0f))
-                if (t > 1f && t < eventT) { eventT = t; eventType = 3; hitDisc = other }
+        val dt = 1f / 60f
+        val friction = 0.992f
+        val restitution = 0.86f
+        val maxSteps = 900
+        for (step in 0 until maxSteps) {
+            var energy = 0f
+            for (i in 0 until n) {
+                if (abs(vx[i]) + abs(vy[i]) < 2f) { vx[i] = 0f; vy[i] = 0f; continue }
+                x[i] += vx[i] * dt
+                y[i] += vy[i] * dt
+                if (x[i] < left + radius[i]) { x[i] = left + radius[i]; vx[i] = abs(vx[i]) * restitution }
+                if (x[i] > right - radius[i]) { x[i] = right - radius[i]; vx[i] = -abs(vx[i]) * restitution }
+                if (y[i] < top + radius[i]) { y[i] = top + radius[i]; vy[i] = abs(vy[i]) * restitution }
+                if (y[i] > bottom - radius[i]) { y[i] = bottom - radius[i]; vy[i] = -abs(vy[i]) * restitution }
             }
 
-            if (!eventT.isFinite()) return@repeat
-            val nx = x + vx * eventT
-            val ny = y + vy * eventT
-            rays.add(Ray(x, y, nx, ny))
-            x = nx; y = ny
-
-            when (eventType) {
-                1 -> vx = -vx
-                2 -> vy = -vy
-                3 -> {
-                    val other = hitDisc ?: return@repeat
-                    val cx = other.x - x
-                    val cy = other.y - y
-                    val cl = hypot(cx, cy).coerceAtLeast(1f)
-                    val nxn = cx / cl
-                    val nyn = cy / cl
-                    val dot = vx * nxn + vy * nyn
-                    vx -= dot * nxn
-                    vy -= dot * nyn
-                    moving.remove(other)
+            // Resolve every overlapping pair; several passes stabilize dense clusters.
+            repeat(3) {
+                for (i in 0 until n) for (j in i + 1 until n) {
+                    var ox = x[j] - x[i]
+                    var oy = y[j] - y[i]
+                    val minDist = radius[i] + radius[j]
+                    val d2 = ox * ox + oy * oy
+                    if (d2 >= minDist * minDist) continue
+                    val d = sqrt(d2).coerceAtLeast(0.01f)
+                    val nx = ox / d; val ny = oy / d
+                    val overlap = minDist - d
+                    x[i] -= nx * overlap * 0.5f; y[i] -= ny * overlap * 0.5f
+                    x[j] += nx * overlap * 0.5f; y[j] += ny * overlap * 0.5f
+                    val rel = (vx[i] - vx[j]) * nx + (vy[i] - vy[j]) * ny
+                    if (rel > 0f) {
+                        val impulse = rel * restitution
+                        vx[i] -= impulse * nx; vy[i] -= impulse * ny
+                        vx[j] += impulse * nx; vy[j] += impulse * ny
+                    }
                 }
             }
+
+            for (i in 0 until n) {
+                vx[i] *= friction; vy[i] *= friction
+                energy += abs(vx[i]) + abs(vy[i])
+                if (step % 8 == 0 && (abs(x[i] - lastX[i]) + abs(y[i] - lastY[i]) > 2f)) {
+                    paths.add(Ray(lastX[i], lastY[i], x[i], y[i], i))
+                    lastX[i] = x[i]; lastY[i] = y[i]
+                }
+            }
+            if (energy < 8f) break
         }
-        return rays
+        for (i in 0 until n) {
+            if (abs(x[i] - lastX[i]) + abs(y[i] - lastY[i]) > 1f)
+                paths.add(Ray(lastX[i], lastY[i], x[i], y[i], i))
+        }
+        return Result(paths, (0 until n).map { Disc(x[it], y[it], radius[it]) })
     }
+
+    fun predict(discs: List<Disc>, left: Float, top: Float, right: Float, bottom: Float): List<Ray> =
+        simulate(discs, left, top, right, bottom).paths
 }
 
 class AimOverlay(context: Context) : View(context) {
@@ -298,8 +302,10 @@ class AimOverlay(context: Context) : View(context) {
         list.forEach { c.drawCircle(it.x, it.y, it.radius, discPaint) }
         val striker = list.maxByOrNull { it.y }
         if (striker != null) c.drawCircle(striker.x, striker.y, striker.radius + 5f, strikerPaint)
-        val rays = CarromPhysics.predict(list, screenW * .03f, screenH * .08f, screenW * .97f, screenH * .92f)
-        rays.forEach { c.drawLine(it.x1, it.y1, it.x2, it.y2, pathPaint) }
-        c.drawText("CarromAimPro | أقراص مرصودة: ${list.size}", 20f, 38f, textPaint)
+        val simulation = CarromPhysics.simulate(list, screenW * .03f, screenH * .08f, screenW * .97f, screenH * .92f)
+        simulation.paths.forEach { c.drawLine(it.x1, it.y1, it.x2, it.y2, pathPaint) }
+        val ghostPaint = Paint(3).apply { color = Color.MAGENTA; style = Paint.Style.STROKE; strokeWidth = 2f; alpha = 150 }
+        simulation.finalDiscs.forEach { c.drawCircle(it.x, it.y, it.radius, ghostPaint) }
+        c.drawText("مسارات تقديرية لكل الأقراص: ${list.size}", 20f, 38f, textPaint)
     }
 }
