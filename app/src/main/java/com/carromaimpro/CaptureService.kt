@@ -77,7 +77,7 @@ class CaptureService : Service() {
 data class Disc(val x: Float, val y: Float, val radius: Float)
 
 object DiscVision {
-    private data class Candidate(val disc: Disc, val score: Int)
+    private data class Candidate(val disc: Disc, val score: Int, val kind: Int)
 
     // Color-aware, coarse scan: recognizes common white, black and red carrom pieces.
     // Coordinates are mapped back to the original screen for the overlay.
@@ -148,7 +148,7 @@ object DiscVision {
                                 hypot(it.disc.x - candidate.x, it.disc.y - candidate.y) <
                                     min(it.disc.radius, candidate.radius) * 1.35f
                             }) {
-                            candidates.add(Candidate(candidate, bestScore))
+                            candidates.add(Candidate(candidate, bestScore, kind))
                         }
                     }
                 }
@@ -172,10 +172,26 @@ object DiscVision {
             }
             .take(25)
 
-        // A real carrom position should contain several piece-like circles.
-        // Until that minimum is met, return no detections and draw no aiming marks.
-        if (boardCandidates.size < 6) return emptyList()
-        return boardCandidates
+        // Fail closed: a phone screen without a carrom board must not produce marks.
+        // Require multiple piece colors and a striker-like piece in the lower board area.
+        val selected = candidates
+            .sortedByDescending { it.score }
+            .filter {
+                it.disc.x / scale >= boardLeft && it.disc.x / scale <= boardRight &&
+                it.disc.y / scale >= boardTop && it.disc.y / scale <= boardBottom
+            }
+            .take(25)
+        val distinctKinds = selected.map { it.kind }.distinct().size
+        val hasLowerPiece = selected.any {
+            it.disc.y / scale > boardTop + boardSize * 0.68f
+        }
+        val xs = selected.map { it.disc.x / scale }
+        val ys = selected.map { it.disc.y / scale }
+        val spreadX = if (xs.isEmpty()) 0f else xs.maxOrNull()!! - xs.minOrNull()!!
+        val spreadY = if (ys.isEmpty()) 0f else ys.maxOrNull()!! - ys.minOrNull()!!
+        if (selected.size < 6 || distinctKinds < 2 || !hasLowerPiece ||
+            spreadX > boardSize * 0.82f || spreadY > boardSize * 0.82f) return emptyList()
+        return selected.map { it.disc }
     }
 }
 
@@ -277,10 +293,8 @@ class AimOverlay(context: Context) : View(context) {
         super.onDraw(c)
         val list = discs
         // Fail closed: never draw circles or paths unless a plausible board position exists.
-        if (list.size < 6) {
-            c.drawText("بانتظار التعرّف على طاولة كاروم...", 20f, 42f, textPaint)
-            return
-        }
+        // Keep the overlay completely invisible until a plausible board is detected.
+        if (list.size < 6) return
         list.forEach { c.drawCircle(it.x, it.y, it.radius, discPaint) }
         val striker = list.maxByOrNull { it.y }
         if (striker != null) c.drawCircle(striker.x, striker.y, striker.radius + 5f, strikerPaint)
