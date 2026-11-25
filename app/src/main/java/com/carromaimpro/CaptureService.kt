@@ -17,6 +17,8 @@ class CaptureService : Service() {
     private var window: WindowManager? = null
     private var overlay: AimOverlay? = null
     private val handler = Handler(Looper.getMainLooper())
+    private val analysisThread = HandlerThread("CarromAnalysis").apply { start() }
+    private val analysisHandler = Handler(analysisThread.looper)
     private var lastAnalysis = 0L
     private val tracker = DiscTracker()
 
@@ -40,7 +42,7 @@ class CaptureService : Service() {
         reader = ImageReader.newInstance(dm.widthPixels, dm.heightPixels, PixelFormat.RGBA_8888, 2)
         reader?.setOnImageAvailableListener({ r ->
             val now = SystemClock.elapsedRealtime()
-            if (now - lastAnalysis < 250) { r.acquireLatestImage()?.close(); return@setOnImageAvailableListener }
+            if (now - lastAnalysis < 160) { r.acquireLatestImage()?.close(); return@setOnImageAvailableListener }
             lastAnalysis = now
             val image = r.acquireLatestImage() ?: return@setOnImageAvailableListener
             try {
@@ -58,7 +60,7 @@ class CaptureService : Service() {
                 handler.post { overlay?.update(tracked.discs, dm.widthPixels, dm.heightPixels, tracked.isMoving, DiscVision.currentBoardBounds(), liveAim) }
             } catch (_: Exception) {
             } finally { image.close() }
-        }, handler)
+        }, analysisHandler)
         display = projection?.createVirtualDisplay("CarromAimProCapture", dm.widthPixels, dm.heightPixels, dm.densityDpi,
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, reader?.surface, null, handler)
         window = getSystemService(WINDOW_SERVICE) as WindowManager
@@ -73,6 +75,7 @@ class CaptureService : Service() {
 
     override fun onDestroy() {
         display?.release(); reader?.close(); projection?.stop()
+        analysisThread.quitSafely()
         try { window?.removeView(overlay) } catch (_: Exception) {}
         super.onDestroy()
     }
@@ -110,7 +113,9 @@ class DiscTracker {
         var moving = false
 
         for (match in matches) {
-            if (!usedTracks.add(match.trackIndex) || !usedDetections.add(match.detectionIndex)) continue
+            if (match.trackIndex in usedTracks || match.detectionIndex in usedDetections) continue
+            usedTracks.add(match.trackIndex)
+            usedDetections.add(match.detectionIndex)
             val track = tracks[match.trackIndex]
             val next = detections[match.detectionIndex]
             val elapsed = ((timestamp - track.lastSeen).coerceAtLeast(1L) / 1000f).coerceAtMost(0.8f)
@@ -522,7 +527,8 @@ object CarromPhysics {
                     x[j] += nx * overlap * 0.5f; y[j] += ny * overlap * 0.5f
                     val rel = (vx[i] - vx[j]) * nx + (vy[i] - vy[j]) * ny
                     if (rel > 0f) {
-                        val impulse = rel * restitution
+                        val coinRestitution = 0.92f
+                        val impulse = rel * (1f + coinRestitution) * 0.5f
                         vx[i] -= impulse * nx; vy[i] -= impulse * ny
                         vx[j] += impulse * nx; vy[j] += impulse * ny
                     }
