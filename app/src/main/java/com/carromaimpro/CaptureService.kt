@@ -210,7 +210,13 @@ object DiscVision {
         small.getPixels(pixels, 0, w, 0, 0, w, h)
         small.recycle()
 
-        val board = findBoardBounds(pixels, w, h) ?: centeredBoard(w, h)
+        // Fail closed: never guess a centered square when the actual board is not detected.
+        // A guessed board caused false disc detections on unrelated screens.
+        val board = findBoardBounds(pixels, w, h)
+        if (board == null) {
+            detectedBoard = null
+            return emptyList()
+        }
         detectedBoard = RectF(board.left*scale, board.top*scale, board.right*scale, board.bottom*scale)
         val minR = max(6, w / 72)
         val maxR = max(minR + 2, w / 32)
