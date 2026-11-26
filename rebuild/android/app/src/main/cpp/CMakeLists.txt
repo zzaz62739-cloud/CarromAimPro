@@ -4,6 +4,6 @@ add_library(carromphysics SHARED
     PhysicsJni.cpp
     ../../../../../native/CarromPhysics.cpp
 )
-target_include_directories(carromphysics PRIVATE ../../../../native)
+target_include_directories(carromphysics PRIVATE ../../../../../native)
 target_compile_features(carromphysics PRIVATE cxx_std_17)
 target_compile_options(carromphysics PRIVATE -Wall -Wextra -Werror)
