@@ -1,5 +1,6 @@
 #include <jni.h>
-#include <vector>\n#include <utility>
+#include <vector>
+#include <utility>
 #include <cstdint>
 #include "CarromPhysics.h"
 
