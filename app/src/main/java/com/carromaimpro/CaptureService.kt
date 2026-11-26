@@ -173,28 +173,106 @@ object DiscVision {
     }
 
     private fun findBoardBounds(px: IntArray, w: Int, h: Int): RectF? {
-        val step = max(2, w / 240)
-        fun orange(c: Int): Boolean {
-            val r=Color.red(c); val g=Color.green(c); val b=Color.blue(c)
-            return r>125 && g>45 && g<185 && b<105 && r>g*1.22f && r-b>65
+        // Detect the wooden frame from sampled screen pixels. Carrom Pool themes
+        // vary from orange to muted brown, so use a hue/contrast range rather
+        // than the previous narrow orange-only threshold.
+        val step = max(2, w / 300)
+        fun frameColor(c: Int): Boolean {
+            val r = Color.red(c); val g = Color.green(c); val b = Color.blue(c)
+            val warmWood = r > 92 && g > 38 && g < 215 && b < 165 &&
+                r > g * 1.12f && r - b > 32
+            val goldenWood = r > 135 && g > 75 && g < 205 && b < 125 &&
+                r > g * 1.08f && r - b > 45
+            return warmWood || goldenWood
         }
-        val rows=IntArray(h)
-        var y=0
-        while(y<h){ var x=0; while(x<w){ if(orange(px[y*w+x])) rows[y]++; x+=step }; y+=step }
-        val rowThreshold=max(3,w/(step*24))
-        var top=-1; var bottom=-1; y=0
-        while(y<h){ if(rows[y]>=rowThreshold){if(top<0)top=y;bottom=y}; y+=step }
-        if(top<0 || bottom-top<h*0.18f)return null
-        val colThreshold=max(3,(bottom-top)/(step*24))
-        var left=-1; var right=-1; var x=0
-        while(x<w){ var hits=0; var yy=top; while(yy<=bottom){if(orange(px[yy*w+x]))hits++;yy+=step}; if(hits>=colThreshold){if(left<0)left=x;right=x};x+=step }
-        if(left<0 || right-left<w*0.20f)return null
-        val bw=(right-left).toFloat(); val bh=(bottom-top).toFloat()
-        if(bw/bh !in 0.72f..1.38f)return null
-        val side=min(bw,bh); val cx=(left+right)/2f; val cy=(top+bottom)/2f
-        val inset=side*0.018f
-        return RectF(max(0f,cx-side/2f+inset),max(0f,cy-side/2f+inset),
-            min(w.toFloat(),cx+side/2f-inset),min(h.toFloat(),cy+side/2f-inset))
+
+        val rowHits = IntArray(h)
+        var sampledCols = 0
+        var y = 0
+        while (y < h) {
+            var x = 0
+            while (x < w) {
+                if (frameColor(px[y * w + x])) rowHits[y]++
+                x += step
+            }
+            sampledCols++
+            y += step
+        }
+        val rowThreshold = max(4, (sampledCols * 0.035f).roundToInt())
+        var top = -1
+        var bottom = -1
+        for (yy in 0 until h step step) {
+            if (rowHits[yy] >= rowThreshold) {
+                if (top < 0) top = yy
+                bottom = yy
+            }
+        }
+        if (top < 0 || bottom - top < h * 0.18f) return null
+
+        val colHits = IntArray(w)
+        var sampledRows = 0
+        y = top
+        while (y <= bottom) {
+            var x = 0
+            while (x < w) {
+                if (frameColor(px[y * w + x])) colHits[x]++
+                x += step
+            }
+            sampledRows++
+            y += step
+        }
+        val colThreshold = max(4, (sampledRows * 0.035f).roundToInt())
+        var left = -1
+        var right = -1
+        for (xx in 0 until w step step) {
+            if (colHits[xx] >= colThreshold) {
+                if (left < 0) left = xx
+                right = xx
+            }
+        }
+        if (left < 0 || right - left < w * 0.48f) return null
+
+        // Refine the rectangle using only warm-frame pixels inside the coarse
+        // scanline bounds; reject UI bars and isolated orange buttons.
+        var minX = w
+        var maxX = 0
+        var minY = h
+        var maxY = 0
+        var frameSamples = 0
+        y = top
+        while (y <= bottom) {
+            var x = left
+            while (x <= right) {
+                if (frameColor(px[y * w + x])) {
+                    minX = min(minX, x); maxX = max(maxX, x)
+                    minY = min(minY, y); maxY = max(maxY, y)
+                    frameSamples++
+                }
+                x += step
+            }
+            y += step
+        }
+        if (frameSamples < 30 || maxX <= minX || maxY <= minY) return null
+        val bw = (maxX - minX).toFloat()
+        val bh = (maxY - minY).toFloat()
+        val ratio = bw / bh.coerceAtLeast(1f)
+        if (ratio !in 0.76f..1.32f) return null
+        if (bw < w * 0.48f || bh < h * 0.18f) return null
+
+        val side = min(bw, bh)
+        val cx = (minX + maxX) / 2f
+        val cy = (minY + maxY) / 2f
+        val inset = side * 0.018f
+        val bounds = RectF(
+            max(0f, cx - side / 2f + inset),
+            max(0f, cy - side / 2f + inset),
+            min(w.toFloat(), cx + side / 2f - inset),
+            min(h.toFloat(), cy + side / 2f - inset)
+        )
+        // A real board should be approximately square and occupy a substantial
+        // part of the captured screen, not a small HUD decoration.
+        if (bounds.width() < w * 0.45f || bounds.height() < h * 0.16f) return null
+        return bounds
     }
 
     // Color-aware, coarse scan: recognizes common white, black and red carrom pieces.
