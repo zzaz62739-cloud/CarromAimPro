@@ -56,7 +56,11 @@ class CaptureService : Service() {
         }
 
         createNotificationChannel()
-        if (Build.VERSION.SDK_INT >= 29) {\n            startForeground(NOTIFICATION_ID, buildNotification("بانتظار أول إطار شاشة"), ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)\n        } else {\n            startForeground(NOTIFICATION_ID, buildNotification("بانتظار أول إطار شاشة"))\n        }
+        if (Build.VERSION.SDK_INT >= 29) {
+            startForeground(NOTIFICATION_ID, buildNotification("بانتظار أول إطار شاشة"), ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+        } else {
+            startForeground(NOTIFICATION_ID, buildNotification("بانتظار أول إطار شاشة"))
+        }
         val manager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         projection = manager.getMediaProjection(resultCode, resultData)
         if (projection == null) {
@@ -99,7 +103,8 @@ class CaptureService : Service() {
                 stopSelf()
             }
         }, workerHandler)
-\n        display = projection?.createVirtualDisplay(
+
+        display = projection?.createVirtualDisplay(
             "CarromRebuildCapture",
             width,
             height,
