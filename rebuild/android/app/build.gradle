@@ -9,6 +9,12 @@ android {
         targetSdk 35
         versionCode 1
         versionName '0.1.0'
+        externalNativeBuild {
+            cmake { cppFlags '-std=c++17 -Wall -Wextra -Werror' }
+        }
+    }
+    externalNativeBuild {
+        cmake { path file('src/main/cpp/CMakeLists.txt') }
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
