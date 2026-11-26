@@ -14,3 +14,6 @@ Next milestones:
 2. Implement positive Carrom Pool board recognition with confidence gates.
 3. Connect normalized detections to the standalone physics engine.
 4. Only then design a non-touchable rendering layer and test its impact on game touch latency.
+
+## Native physics integration
+The Android module now loads the C++ physics core through JNI. The native library is built from the same `rebuild/native/CarromPhysics.cpp` used by the standalone smoke tests. This milestone only links the engine; screen recognition and aim-to-velocity calibration are not yet implemented.
