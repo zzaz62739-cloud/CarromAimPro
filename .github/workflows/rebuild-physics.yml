@@ -1,0 +1,24 @@
+name: Rebuild physics tests
+on:
+  push:
+    branches: [kala-reference-rebuild]
+    paths:
+      - "rebuild/**"
+      - ".github/workflows/rebuild-physics.yml"
+  pull_request:
+    paths:
+      - "rebuild/**"
+      - ".github/workflows/rebuild-physics.yml"
+jobs:
+  physics:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile physics smoke test
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Werror \
+            rebuild/native/CarromPhysics.cpp \
+            rebuild/tests/physics_smoke.cpp \
+            -o physics_smoke
+      - name: Run physics smoke test
+        run: ./physics_smoke
