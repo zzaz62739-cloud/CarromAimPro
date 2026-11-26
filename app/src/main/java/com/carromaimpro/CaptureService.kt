@@ -367,15 +367,19 @@ object DiscVision {
         }.take(25)
         val distinctKinds = selected.map { it.kind }.distinct().size
         val boardHeight = board.height()
-        val hasLowerPiece = selected.any { it.disc.y/scale > board.top + boardHeight*0.68f }
+        // The striker sits on the lower launch baseline. Requiring a piece in
+        // this narrow lower zone avoids mistaking an ordinary white coin in the
+        // middle of the board for the striker.
+        val hasLowerPiece = selected.any { it.disc.y/scale > board.top + boardHeight*0.76f }
         val xs = selected.map { it.disc.x/scale }; val ys = selected.map { it.disc.y/scale }
         val spreadX = if(xs.isEmpty()) 0f else xs.maxOrNull()!!-xs.minOrNull()!!
         val spreadY = if(ys.isEmpty()) 0f else ys.maxOrNull()!!-ys.minOrNull()!!
         if(selected.size<6 || distinctKinds<2 || !hasLowerPiece ||
             spreadX>board.width()*0.82f || spreadY>board.height()*0.82f) return emptyList()
-        // Mark the largest white piece in the lower baseline region as the striker.
-        val white = selected.filter { it.kind==1 && it.disc.y/scale > board.top+boardHeight*0.64f }
-        val striker = white.maxByOrNull { it.disc.radius }
+        // Prefer the lowest white disc on the launch baseline; use radius only
+        // as a tie-breaker because all carrom pieces are almost the same size.
+        val white = selected.filter { it.kind==1 && it.disc.y/scale > board.top+boardHeight*0.76f }
+        val striker = white.maxWithOrNull(compareBy<Candidate> { it.disc.y }.thenBy { it.disc.radius })
         return selected.map { if(striker!=null && it===striker)
             Disc(it.disc.x,it.disc.y,it.disc.radius,4) else it.disc }
 
