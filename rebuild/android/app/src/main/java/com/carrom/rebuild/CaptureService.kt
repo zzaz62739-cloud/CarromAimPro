@@ -1,5 +1,6 @@
 package com.carrom.rebuild
 
+import android.app.Activity
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -48,7 +49,7 @@ class CaptureService : Service() {
         val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, 0)
         @Suppress("DEPRECATION")
         val resultData = intent.getParcelableExtra<Intent>(EXTRA_RESULT_DATA)
-        if (resultCode != RESULT_OK || resultData == null) {
+        if (resultCode != Activity.RESULT_OK || resultData == null) {
             stopSelf()
             return START_NOT_STICKY
         }
