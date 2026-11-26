@@ -1,11 +1,15 @@
 # Kala-reference rebuild (independent implementation)
 
-This directory is the clean implementation track. The legacy CarromAimPro app remains untouched; this branch isolates the replacement work.
+This directory is the clean implementation track. The legacy CarromAimPro app remains untouched; this branch isolates replacement work.
 
 ## Evidence from the supplied KalaEngine 2.1.0 APK
 
 Inspected locally from the APK already uploaded in the conversation:
 
+- Package: `com.aimai.engine`; label: `KalaEngine`; version: `2.1.0`; target SDK: 36.
+- Manifest package-query list includes `com.miniclip.carrom`.
+- The manifest declares both `android.permission.SYSTEM_ALERT_WINDOW` and `android.permission.SYSTEM_OVERLAY_WINDOW`. This is a declaration only; it does not prove which runtime rendering route is used or whether a settings prompt is shown in the user's observed flow.
+- Manifest components include a BlackBox virtualization framework namespace (`top.niunaijun.blackbox...`) with proxy activities/services/providers. This is evidence of an app virtualization/container framework being bundled, but not by itself proof that Carrom Pool is launched inside it in every configuration.
 - The ARM64 `libblackbox.so` dynamically depends on `libandroid.so`, `libEGL.so`, `libGLESv3.so`, and `libjnigraphics.so`.
 - Its undefined imports include `eglSwapBuffers`, `eglGetCurrentContext`, `eglGetCurrentDisplay`, `eglGetCurrentSurface`, `eglQuerySurface`, and a broad set of GLES drawing calls.
 - Strings include `Dear ImGui 1.92.8`, `imgui_impl_opengl3`, and `AIMAI_ENGINE`.
