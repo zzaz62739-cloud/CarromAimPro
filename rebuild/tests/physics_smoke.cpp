@@ -10,4 +10,6 @@ int main() {
     assert(result.finalDiscs.size()==2);
     assert(!result.trace.empty());
     assert(result.finalDiscs[0].position.x > 0.25);
+    assert(result.finalDiscs[1].position.x > 0.55);
+    assert(result.settled);
 }
