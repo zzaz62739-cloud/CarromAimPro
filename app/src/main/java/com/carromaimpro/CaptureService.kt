@@ -705,23 +705,24 @@ class AimOverlay(context: Context) : View(context) {
             c.drawText("تتبع حركة الأقراص...", 20f, 38f, textPaint)
             return
         }
-        val plans = CarromPhysics.bestPlans(list, board.left, board.top, board.right, board.bottom)
-        val best = plans.firstOrNull()
         val liveAim = liveAimPoint
-        val aimPaint = Paint(3).apply { color = if (liveAim != null) Color.CYAN else Color.YELLOW; style = Paint.Style.STROKE; strokeWidth = 5f }
-        val coinPaint = Paint(3).apply { color = Color.GREEN; style = Paint.Style.STROKE; strokeWidth = 4f }
-        if (liveAim != null && striker != null) {
-            c.drawLine(striker.x, striker.y, liveAim.x, liveAim.y, aimPaint)
-            c.drawText("تم رصد خط التصويب المباشر", 20f, 38f, textPaint)
-        } else if (best != null) {
-            c.drawLine(best.strikerX, best.strikerY, best.ghostX, best.ghostY, aimPaint)
-            c.drawLine(best.coinX, best.coinY, best.pocketX, best.pocketY, coinPaint)
-            c.drawCircle(best.ghostX, best.ghostY, (striker?.radius ?: 10f)*0.75f, aimPaint)
-            c.drawText("اقتراح تصويب تلقائي - تقديري", 20f, 38f, textPaint)
+
+        // Do not show any predicted trajectory while the player is not aiming.
+        // This keeps the overlay quiet between shots and prevents the old
+        // always-on guessed paths from appearing over the board.
+        if (liveAim == null || striker == null) {
+            c.drawText("وجّه قرص الضرب لإظهار المسارات", 20f, 38f, textPaint)
+            return
         }
+
+        val aimPaint = Paint(3).apply { color = Color.CYAN; style = Paint.Style.STROKE; strokeWidth = 5f }
+        c.drawLine(striker.x, striker.y, liveAim.x, liveAim.y, aimPaint)
+        c.drawText("تم رصد توجيه قرص الضرب", 20f, 38f, textPaint)
+
+        // Run the approximate collision simulation only after the game itself
+        // exposes an aiming guide. No speculative lines are drawn at rest.
         val simulation = CarromPhysics.simulate(
-            list, board.left, board.top, board.right, board.bottom,
-            liveAim?.x ?: best?.ghostX, liveAim?.y ?: best?.ghostY
+            list, board.left, board.top, board.right, board.bottom, liveAim.x, liveAim.y
         )
         simulation.paths.forEach { c.drawLine(it.x1, it.y1, it.x2, it.y2, pathPaint) }
         val ghostPaint = Paint(3).apply { color = Color.MAGENTA; style = Paint.Style.STROKE; strokeWidth = 2f; alpha = 150 }
@@ -729,6 +730,6 @@ class AimOverlay(context: Context) : View(context) {
             ghostPaint.color = when (it.kind) { 1 -> Color.GREEN; 2 -> Color.LTGRAY; 3 -> Color.MAGENTA; else -> Color.MAGENTA }
             c.drawCircle(it.x, it.y, it.radius, ghostPaint)
         }
-        c.drawText("مسارات تقديرية لكل الأقراص: ${list.size}", 20f, 38f, textPaint)
+        c.drawText("مسارات متوقعة - تقديرية", 20f, 72f, textPaint)
     }
 }
