@@ -6,6 +6,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
@@ -55,7 +56,7 @@ class CaptureService : Service() {
         }
 
         createNotificationChannel()
-        startForeground(NOTIFICATION_ID, buildNotification("بانتظار أول إطار شاشة"))
+        if (Build.VERSION.SDK_INT >= 29) {\n            startForeground(NOTIFICATION_ID, buildNotification("بانتظار أول إطار شاشة"), ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)\n        } else {\n            startForeground(NOTIFICATION_ID, buildNotification("بانتظار أول إطار شاشة"))\n        }
         val manager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         projection = manager.getMediaProjection(resultCode, resultData)
         if (projection == null) {
@@ -93,7 +94,12 @@ class CaptureService : Service() {
             }
         }, workerHandler)
 
-        display = projection?.createVirtualDisplay(
+        projection?.registerCallback(object : MediaProjection.Callback() {
+            override fun onStop() {
+                stopSelf()
+            }
+        }, workerHandler)
+\n        display = projection?.createVirtualDisplay(
             "CarromRebuildCapture",
             width,
             height,
@@ -103,11 +109,6 @@ class CaptureService : Service() {
             null,
             workerHandler
         )
-        projection?.registerCallback(object : MediaProjection.Callback() {
-            override fun onStop() {
-                stopSelf()
-            }
-        }, workerHandler)
         return START_NOT_STICKY
     }
 
