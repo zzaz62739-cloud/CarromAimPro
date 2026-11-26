@@ -290,12 +290,38 @@ object DiscVision {
 
         // Fail closed: never guess a centered square when the actual board is not detected.
         // A guessed board caused false disc detections on unrelated screens.
-        val board = findBoardBounds(pixels, w, h)
+        var board = findBoardBounds(pixels, w, h)
         if (board == null) {
+            // Keep the last board only for a very short visual dropout. A missing
+            // frame must not make stale coordinates look like current detections.
             detectedBoard = null
             return emptyList()
         }
-        detectedBoard = RectF(board.left*scale, board.top*scale, board.right*scale, board.bottom*scale)
+
+        // Stabilize the detected table rectangle across adjacent frames. The
+        // wooden border can shimmer with animation/compression; without this
+        // filter, a few pixels of movement make every disc appear to jump.
+        val previous = detectedBoard?.let {
+            RectF(it.left / scale, it.top / scale, it.right / scale, it.bottom / scale)
+        }
+        if (previous != null) {
+            val ix = max(0f, min(previous.right, board.right) - max(previous.left, board.left))
+            val iy = max(0f, min(previous.bottom, board.bottom) - max(previous.top, board.top))
+            val intersection = ix * iy
+            val union = previous.width() * previous.height() + board.width() * board.height() - intersection
+            val overlap = if (union > 0f) intersection / union else 0f
+            if (overlap > 0.55f) {
+                val oldWeight = 0.72f
+                val newWeight = 1f - oldWeight
+                board = RectF(
+                    previous.left * oldWeight + board.left * newWeight,
+                    previous.top * oldWeight + board.top * newWeight,
+                    previous.right * oldWeight + board.right * newWeight,
+                    previous.bottom * oldWeight + board.bottom * newWeight
+                )
+            }
+        }
+        detectedBoard = RectF(board.left * scale, board.top * scale, board.right * scale, board.bottom * scale)
         val minR = max(6, w / 72)
         val maxR = max(minR + 2, w / 32)
         val step = max(3, w / 120)
