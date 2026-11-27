@@ -51,4 +51,18 @@ int main() {
     assert(zeroDt.trace.empty() && hugeDt.trace.empty());
     assert(nanVelocity.trace.empty() && invalidMass.trace.empty());
     assert(zeroDt.finalDiscs.size() == 1 && invalidMass.finalDiscs.size() == 1);
+    // Screenshot-derived, manually estimated fixture: striker moving upward into a
+    // central cluster should produce at least one target-disc motion.
+    carrom::Board snapshotBoard;
+    snapshotBoard.left = 0.04; snapshotBoard.top = 0.05;
+    snapshotBoard.right = 0.96; snapshotBoard.bottom = 0.95;
+    snapshotBoard.pocketRadius = 0.035;
+    snapshotBoard.frictionPerSecond = 0.35;
+    carrom::Disc sampleStriker{20, {0.505, 0.837}, {0.0, -1.5}, 0.025, 1.0, true};
+    carrom::Disc sampleTarget{21, {0.520, 0.400}, {0.0, 0.0}, 0.025, 1.0, true};
+    auto snapshotShot = carrom::simulate({sampleStriker, sampleTarget}, snapshotBoard, 3.0, 1.0/240.0);
+    assert(snapshotShot.finalDiscs.size() == 2);
+    assert(snapshotShot.finalDiscs[1].position.y < 0.400 ||
+           std::abs(snapshotShot.finalDiscs[1].velocity.y) > 0.01);
+
 }
