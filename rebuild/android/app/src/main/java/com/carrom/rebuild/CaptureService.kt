@@ -81,12 +81,17 @@ class CaptureService : Service() {
             try {
                 image = source.acquireLatestImage()
                 if (image != null) {
-                    // The first milestone validates frame delivery only. Do not retain
-                    // full-resolution bitmaps or draw anything until board detection is trusted.
                     framesSeen++
                     lastFrameAt = SystemClock.elapsedRealtime()
+                    // Run conservative vision once per ~30 frames to bound CPU and
+                    // allocation pressure. No overlay and no touch interception.
                     if (framesSeen == 1L || framesSeen % 30L == 0L) {
-                        val text = "التقاط الشاشة يعمل • إطارات: $framesSeen"
+                        val detection = BoardVision.detect(image)
+                        val text = if (detection.found) {
+                            "تم رصد لوحة محتملة • أقراص: ${detection.discs.size}"
+                        } else {
+                            "التقاط الشاشة يعمل • لم يتم تأكيد لوحة كاروم"
+                        }
                         val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
                         manager.notify(NOTIFICATION_ID, buildNotification(text))
                     }
