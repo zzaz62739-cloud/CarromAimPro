@@ -65,4 +65,22 @@ int main() {
     assert(snapshotShot.finalDiscs[1].position.y < 0.400 ||
            std::abs(snapshotShot.finalDiscs[1].velocity.y) > 0.01);
 
+    // Different game modes/layouts may contain different numbers of discs.
+    // The physics API must preserve every detected disc without assuming a
+    // fixed cluster shape or a fixed count (up to its documented 32-disc cap).
+    for (const int count : {4, 12, 24, 32}) {
+        std::vector<carrom::Disc> layout;
+        for (int i = 0; i < count; ++i) {
+            const int col = i % 8;
+            const int row = i / 8;
+            layout.push_back(carrom::Disc{
+                100 + i,
+                {0.15 + 0.10 * col, 0.20 + 0.18 * row},
+                {0.0, 0.0}, 0.012, 1.0, true
+            });
+        }
+        auto variableLayout = carrom::simulate(layout, board, 0.1, 1.0/240.0);
+        assert(variableLayout.finalDiscs.size() == static_cast<size_t>(count));
+    }
+
 }
