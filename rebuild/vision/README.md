@@ -1,11 +1,12 @@
-# Screenshot reference fixture (offline only)
+# Screenshot reference fixture and multi-mode vision requirements
 
-Created from the user's portrait Carrom Pool screenshot, 691x1536.
+The first user-provided screenshot (portrait, 691x1536) is one **sample layout only**.
 
-- Board and disc coordinates are approximate hand-measured estimates.
-- This is a static offline fixture to validate normalized coordinates and physics.
-- It is **not** an image-recognition model and does not read a live game frame.
-- Pixel-to-board conversion assumes the estimated board rectangle in the JSON file.
-- Do not use this fixture to claim live capture, automatic disc detection, or aiming is complete.
+- Its board bounds and disc centers are approximate, hand-measured estimates.
+- The JSON fixture is for offline coordinate and physics checks; it is not a detector.
+- Other Carrom Pool modes may have different disc counts, colors, formations, and striker positions.
+- Runtime recognition must detect the board and enumerate the discs present in each frame. It must not hard-code this sample's 14-disc arrangement or assume a fixed formation.
+- The vision pipeline must support variable counts, reject uncertain detections, and pass only positively detected discs to physics. The physics core currently accepts 1–32 discs; exceeding that bound must fail safely and be handled explicitly.
+- Validate recognition against multiple distinct mode screenshots before claiming multi-mode support.
 
-The next legitimate practice-tool step is to implement and test a screenshot importer/board geometry extractor outside a live match, then compare its detections to this fixture.
+Do not claim live capture recognition or automatic aiming is complete based on this fixture.
