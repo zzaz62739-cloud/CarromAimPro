@@ -1,0 +1,28 @@
+{
+  "schema": "carrom_reference_snapshot_v1",
+  "source": "user-provided Carrom Pool screenshot (portrait, 691x1536)",
+  "purpose": "offline physics fixture only; hand-estimated centers, not an automatic detector",
+  "screen_px": { "width": 691, "height": 1536 },
+  "board_screen_px_estimate": { "left": 20, "top": 455, "right": 671, "bottom": 1106 },
+  "normalized_board": { "left": 0.04, "top": 0.05, "right": 0.96, "bottom": 0.95 },
+  "normalized_disc_radius_estimate": 0.025,
+  "pocket_centers_normalized_estimate": [
+    [0.04, 0.05], [0.96, 0.05], [0.04, 0.95], [0.96, 0.95]
+  ],
+  "disc_centers_normalized_estimate": [
+    { "id": 1, "color": "striker", "x": 0.505, "y": 0.837 },
+    { "id": 2, "color": "black", "x": 0.520, "y": 0.400 },
+    { "id": 3, "color": "black", "x": 0.570, "y": 0.430 },
+    { "id": 4, "color": "black", "x": 0.435, "y": 0.432 },
+    { "id": 5, "color": "black", "x": 0.595, "y": 0.466 },
+    { "id": 6, "color": "black", "x": 0.410, "y": 0.526 },
+    { "id": 7, "color": "black", "x": 0.565, "y": 0.560 },
+    { "id": 8, "color": "white", "x": 0.485, "y": 0.442 },
+    { "id": 9, "color": "white", "x": 0.540, "y": 0.448 },
+    { "id": 10, "color": "white", "x": 0.455, "y": 0.486 },
+    { "id": 11, "color": "white", "x": 0.495, "y": 0.500 },
+    { "id": 12, "color": "white", "x": 0.555, "y": 0.500 },
+    { "id": 13, "color": "white", "x": 0.525, "y": 0.540 },
+    { "id": 14, "color": "red", "x": 0.505, "y": 0.490 }
+  ]
+}
