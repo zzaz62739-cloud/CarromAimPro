@@ -120,6 +120,8 @@ object BoardVision {
                 val cy = sumY.toFloat() / count
                 val nx = cx / (width - 1).coerceAtLeast(1)
                 val ny = cy / (height - 1).coerceAtLeast(1)
+                // Orange corner markers and side decorations are not carrom men.
+                if (color == "red" && (nx !in 0.20f..0.80f || ny !in 0.20f..0.78f)) continue
                 val radius = (bw + bh) / 4f / max(width, height).toFloat()
                 output += DiscDetection(nx, ny, radius, color)
             }
