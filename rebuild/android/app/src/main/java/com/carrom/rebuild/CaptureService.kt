@@ -37,6 +37,10 @@ class CaptureService : Service() {
     private var workerHandler: Handler? = null
     @Volatile private var lastFrameAt = 0L
     @Volatile private var framesSeen = 0L
+    // Require repeated positive detections before reporting a board. This is a
+    // notification-only guard, not proof that the detector is calibrated.
+    private var consecutiveBoardDetections = 0
+    private var lastPublishedBoardState: Boolean? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -87,13 +91,26 @@ class CaptureService : Service() {
                     // allocation pressure. No overlay and no touch interception.
                     if (framesSeen == 1L || framesSeen % 30L == 0L) {
                         val detection = BoardVision.detect(image)
-                        val text = if (detection.found) {
-                            "تم رصد لوحة محتملة • أقراص: ${detection.discs.size}"
+                        consecutiveBoardDetections = if (detection.found) {
+                            (consecutiveBoardDetections + 1).coerceAtMost(3)
                         } else {
-                            "التقاط الشاشة يعمل • لم يتم تأكيد لوحة كاروم"
+                            0
                         }
-                        val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-                        manager.notify(NOTIFICATION_ID, buildNotification(text))
+                        // A single frame can contain transient UI effects or
+                        // compression artifacts. Publish a positive result only
+                        // after three sampled frames agree that a board is present.
+                        val confirmed = consecutiveBoardDetections >= 3
+                        val state = if (confirmed) true else if (detection.found) null else false
+                        if (state != null && state != lastPublishedBoardState) {
+                            lastPublishedBoardState = state
+                            val text = if (state) {
+                                "تم رصد لوحة محتملة • أقراص: ${detection.discs.size}"
+                            } else {
+                                "التقاط الشاشة يعمل • لم يتم تأكيد لوحة كاروم"
+                            }
+                            val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+                            manager.notify(NOTIFICATION_ID, buildNotification(text))
+                        }
                     }
                 }
             } catch (_: IllegalStateException) {
